@@ -44,10 +44,10 @@ Then restart `dsh --profile web` and reload the page. The plugin self-activates 
 
 | Method | Path | Description |
 | --- | --- | --- |
-| GET | `/archived-conversation/api/ping` | Liveness probe |
-| GET | `/archived-conversation/api/list` | Archived conversations grouped by project |
-| POST | `/archived-conversation/api/:id/unarchive` | Unarchive |
-| DELETE | `/archived-conversation/api/:id` | Delete |
+| GET | `/archived-conversation/api/ping` | Liveness probe (no Origin required) |
+| GET | `/archived-conversation/api/list` | Archived conversations grouped by project (no Origin required) |
+| POST | `/archived-conversation/api/:id/unarchive` | Unarchive (same-origin Origin + JSON Content-Type + loopback Host) |
+| DELETE | `/archived-conversation/api/:id` | Delete (same-origin Origin + JSON Content-Type + loopback Host) |
 
 ## Layout
 

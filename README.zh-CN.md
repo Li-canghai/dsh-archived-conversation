@@ -44,10 +44,10 @@ npx -p @deepseek-ai/dsh dsh plugin --profile web add <本仓库路径或 git 地
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| GET | `/archived-conversation/api/ping` | 探活 |
-| GET | `/archived-conversation/api/list` | 按项目分组的已归档对话列表 |
-| POST | `/archived-conversation/api/:id/unarchive` | 取消归档 |
-| DELETE | `/archived-conversation/api/:id` | 删除 |
+| GET | `/archived-conversation/api/ping` | 探活(不要求 Origin) |
+| GET | `/archived-conversation/api/list` | 按项目分组的已归档对话列表(不要求 Origin) |
+| POST | `/archived-conversation/api/:id/unarchive` | 取消归档(需同源 Origin + JSON Content-Type + loopback Host) |
+| DELETE | `/archived-conversation/api/:id` | 删除(需同源 Origin + JSON Content-Type + loopback Host) |
 
 ## 目录结构
 

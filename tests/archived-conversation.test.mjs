@@ -31,8 +31,18 @@ import { join } from "node:path";
 const sandbox = mkdtempSync(join(tmpdir(), "arch-conv-test-"));
 const sessionsBase = join(sandbox, "sessions");
 const titlesPath = join(sandbox, "archived-conversation-titles.json");
+const pendingPath = join(sandbox, "archived-conversation-pending.json");
 process.env.ARCHIVED_CONV_SESSIONS_BASE = sessionsBase;
 process.env.ARCHIVED_CONV_TITLES_PATH = titlesPath;
+process.env.ARCHIVED_CONV_PENDING_PATH = pendingPath;
+
+const GUI_HOST = "127.0.0.1:3080";
+const GUI_ORIGIN = `http://${GUI_HOST}`;
+const JSON_HEADERS = {
+  host: GUI_HOST,
+  origin: GUI_ORIGIN,
+  "content-type": "application/json",
+};
 
 const IDS = {
   A: "session-aaaa0000-0000-0000-0000-00000000000a", // big log, projcache hit
@@ -72,7 +82,8 @@ let persistedRaw = null;
 let ctx2 = null;
 let m2 = null;
 
-function makeCtx() {
+function makeCtx(opts = {}) {
+  const detachSession = opts.detachSession || (async () => {});
   const wsState = {
     archivedSessionIds: [IDS.A, IDS.B, IDS.C],
   };
@@ -87,7 +98,7 @@ function makeCtx() {
       wsState.archivedSessionIds = s.archivedSessionIds;
     },
     enqueueOperation: async (fn) => fn(),
-    get: () => ({ detachSession: async () => {} }),
+    get: () => ({ detachSession }),
   };
   return {
     get: (name) =>
@@ -108,7 +119,10 @@ function makeCtx() {
       },
     },
     logger: { warn: () => {}, info: () => {}, error: () => {} },
-    webServer: { register: (def) => { capturedHandler = def.handler; return {}; } },
+    webServer: {
+      port: 3080,
+      register: (def) => { capturedHandler = def.handler; return {}; },
+    },
     emit: () => {},
     effect: (fn) => {
       effects.push(fn);
@@ -123,25 +137,30 @@ async function freshModule() {
   return import(pluginUrl.href + "?v=" + Math.random());
 }
 
-async function callList(mod) {
+async function call(method, url, headers = {}) {
+  let status = 0;
   let body;
-  const res = { writeHead() {}, end: (b) => { body = JSON.parse(b); } };
-  await capturedHandler({ method: "GET", url: "/archived-conversation/api/list" }, res);
-  return body;
+  const res = {
+    writeHead(s) { status = s; },
+    end: (b) => { body = JSON.parse(b); },
+  };
+  await capturedHandler({ method, url, headers }, res);
+  return { status, body };
+}
+
+async function callList(mod) {
+  const r = await call("GET", "/archived-conversation/api/list");
+  return r.body;
 }
 
 async function callDelete(id) {
-  let body;
-  const res = { writeHead() {}, end: (b) => { body = JSON.parse(b); } };
-  await capturedHandler({ method: "DELETE", url: `/archived-conversation/api/${id}` }, res);
-  return body;
+  const r = await call("DELETE", `/archived-conversation/api/${id}`, JSON_HEADERS);
+  return r.body;
 }
 
 async function callUnarchive(id) {
-  let body;
-  const res = { writeHead() {}, end: (b) => { body = JSON.parse(b); } };
-  await capturedHandler({ method: "POST", url: `/archived-conversation/api/${id}/unarchive` }, res);
-  return body;
+  const r = await call("POST", `/archived-conversation/api/${id}/unarchive`, JSON_HEADERS);
+  return r.body;
 }
 
 after(() => {
@@ -225,4 +244,84 @@ test("删除冒烟", async () => {
   assert.equal(body.ok, true);
   assert.ok(!existsSync(join(sessionsBase, "--proj--", IDS.B)), "会话目录已删除");
   assert.ok(!ctx2.workspaceRegistry.requireState().archivedSessionIds.includes(IDS.B), "已从归档集合移除");
+});
+
+test("GET /ping 无 Origin 仍为 200", async () => {
+  const r = await call("GET", "/archived-conversation/api/ping");
+  assert.equal(r.status, 200);
+  assert.equal(r.body.ok, true);
+  assert.equal(typeof r.body.version, "string");
+});
+
+test("POST 无 Origin 返回 403", async () => {
+  const r = await call("POST", `/archived-conversation/api/${IDS.A}/unarchive`, {
+    host: GUI_HOST,
+    "content-type": "application/json",
+  });
+  assert.equal(r.status, 403);
+});
+
+test("POST 恶意 Origin 返回 403", async () => {
+  const r = await call("POST", `/archived-conversation/api/${IDS.A}/unarchive`, {
+    host: GUI_HOST,
+    origin: "http://evil.example",
+    "content-type": "application/json",
+  });
+  assert.equal(r.status, 403);
+});
+
+test("POST 非 loopback Host 返回 403", async () => {
+  const r = await call("POST", `/archived-conversation/api/${IDS.A}/unarchive`, {
+    host: "attacker.com:3080",
+    origin: "http://attacker.com:3080",
+    "content-type": "application/json",
+  });
+  assert.equal(r.status, 403);
+});
+
+test("POST 非 JSON Content-Type 返回 415", async () => {
+  const r = await call("POST", `/archived-conversation/api/${IDS.A}/unarchive`, {
+    host: GUI_HOST,
+    origin: GUI_ORIGIN,
+    "content-type": "application/x-www-form-urlencoded",
+  });
+  assert.equal(r.status, 415);
+});
+
+test("取消归档不在归档集合中的会话返回 404", async () => {
+  const r = await call("POST", `/archived-conversation/api/${IDS.C}/unarchive`, JSON_HEADERS);
+  assert.equal(r.status, 404);
+  assert.equal(r.body.ok, false);
+});
+
+test("detach 失败时不改归档状态、不删目录,并排队", async () => {
+  const m = await freshModule();
+  const ctx = makeCtx({
+    detachSession: async () => {
+      throw new Error("detach boom");
+    },
+  });
+  m.apply(ctx);
+  const dir = join(sessionsBase, "--proj--", IDS.A);
+  assert.ok(existsSync(dir));
+  const r = await call("DELETE", `/archived-conversation/api/${IDS.A}`, JSON_HEADERS);
+  assert.equal(r.status, 200);
+  assert.equal(r.body.ok, false);
+  assert.equal(r.body.queued, true);
+  assert.ok(ctx.workspaceRegistry.requireState().archivedSessionIds.includes(IDS.A));
+  assert.ok(existsSync(dir), "detach 失败不得删除会话目录");
+});
+
+test("同源守卫: Origin 必须匹配 Host,且仅接受 loopback", async () => {
+  const m = await freshModule();
+  assert.equal(m.isSameOriginMutation({ headers: { host: GUI_HOST, origin: GUI_ORIGIN } }), true);
+  assert.equal(m.isSameOriginMutation({ headers: { host: GUI_HOST } }), false);
+  assert.equal(m.isSameOriginMutation({
+    headers: { host: GUI_HOST, origin: "http://evil.example" },
+  }), false);
+  assert.equal(m.isLoopbackHostname("127.0.0.1"), true);
+  assert.equal(m.isLoopbackHostname("192.168.1.1"), false);
+  assert.equal(m.isJsonContentType({ headers: { "content-type": "application/json; charset=utf-8" } }), true);
+  assert.equal(m.resolveGuiOrigin({ headers: { host: GUI_HOST } }, 3080), GUI_ORIGIN);
+  assert.equal(m.resolveGuiOrigin({ headers: { host: "192.168.1.8:3080" } }, 3080), null);
 });
