@@ -62,6 +62,8 @@ makeSession(IDS.B, 2 * 1024 * 1024);
 // ---- counters for slow paths ----
 let coldSnapshotCalls = 0;
 let readFromCalls = 0;
+let registryListCalls = 0;
+let headerCalls = 0;
 
 const projTitles = { [IDS.A]: "项目A标题", [IDS.C]: "项目C标题" };
 const projectionCache = {
@@ -84,15 +86,22 @@ let m2 = null;
 
 function makeCtx(opts = {}) {
   const detachSession = opts.detachSession || (async () => {});
+  const readSessionHeader = opts.readSessionHeader || (async (id) => ({ id, createdAt: 1, cwd: "/proj" }));
   const wsState = {
     archivedSessionIds: [IDS.A, IDS.B, IDS.C],
   };
   const registry = {
     archivedSessionIds: wsState.archivedSessionIds,
-    list: () => [
-      { id: "w1", record: { id: "w1", title: "proj", path: "/proj" }, sessionIds: [IDS.A, IDS.B, IDS.C] },
-    ],
-    readSessionHeader: async (id) => ({ id, createdAt: 1, cwd: "/proj" }),
+    list: () => {
+      registryListCalls++;
+      return [
+        { id: "w1", record: { id: "w1", title: "proj", path: "/proj" }, sessionIds: [IDS.A, IDS.B, IDS.C] },
+      ];
+    },
+    readSessionHeader: async (id) => {
+      headerCalls++;
+      return readSessionHeader(id);
+    },
     requireState: () => wsState,
     setState: async (s) => {
       wsState.archivedSessionIds = s.archivedSessionIds;
@@ -170,6 +179,7 @@ after(() => {
 
 // ============ Phase 1: cold start (no persistent cache) ============
 test("冷启动:无持久化缓存时解析标题并写盘", async () => {
+  registryListCalls = 0;
   const m1 = await freshModule();
   m1.apply(makeCtx());
   const cold = await callList(m1);
@@ -181,6 +191,7 @@ test("冷启动:无持久化缓存时解析标题并写盘", async () => {
   assert.equal(byId[IDS.C].title, "项目C标题", "C 无目录也由 projcache 提供");
   assert.equal(readFromCalls, 1, "readFrom 只对 B 调用一次");
   assert.equal(coldSnapshotCalls, 1, "coldSnapshot 只对 B 调用一次");
+  assert.equal(registryListCalls, 1, "列表重建只枚举一次 workspace");
 
   // wait for the debounced title-cache write
   await new Promise((r) => setTimeout(r, 500));
@@ -198,17 +209,19 @@ test("冷启动:无持久化缓存时解析标题并写盘", async () => {
 test("模拟重启:持久化缓存在场,零慢路径调用", async () => {
   coldSnapshotCalls = 0;
   readFromCalls = 0;
+  headerCalls = 0;
   const m2b = await freshModule();
   const ctx2b = makeCtx();
   m2b.apply(ctx2b);
   const warm = await callList(m2b);
+  ctx2 = ctx2b;
+  m2 = m2b;
   const byId = Object.fromEntries(warm.groups[0].sessions.map((s) => [s.id, s]));
   assert.equal(byId[IDS.A].title, "项目A标题");
   assert.equal(byId[IDS.B].title, "项目B标题");
   assert.equal(readFromCalls, 0, "重启后不触发任何全量解压");
   assert.equal(coldSnapshotCalls, 0, "重启后不触发 coldSnapshot");
-  ctx2 = ctx2b;
-  m2 = m2b;
+  assert.equal(headerCalls, 0, "持久化标题缓存命中时不读取 session header");
 });
 
 // ============ Phase 3: log fingerprint change ============
@@ -229,6 +242,26 @@ test("日志指纹变化:重读但走 projcache 快路径,零解压,持久化缓
   const persisted2 = JSON.parse(readFileSync(titlesPath, "utf8"));
   assert.notEqual(persisted2[IDS.A].fp, persistedRaw[IDS.A].fp, "持久化缓存指纹已更新");
   assert.equal(persisted2[IDS.A].title, "项目A标题v2", "持久化缓存标题已更新");
+});
+
+test("并发列表请求共享同一次重建", async () => {
+  headerCalls = 0;
+  writeFileSync(titlesPath, "{}");
+  const m = await freshModule();
+  m.apply(makeCtx({
+    readSessionHeader: async (id) => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      return { id, createdAt: 1, cwd: "/proj" };
+    },
+  }));
+  try {
+    const [first, second] = await Promise.all([callList(m), callList(m)]);
+    assert.deepEqual(first, second);
+    assert.equal(headerCalls, 3, "三个会话各读取一次 header,不因并发请求翻倍");
+  } finally {
+    // Restore the shared handler used by the mutation smoke tests below.
+    m2.apply(ctx2);
+  }
 });
 
 // ============ Phase 4: unarchive smoke ============
