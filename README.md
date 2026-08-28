@@ -2,6 +2,9 @@
 
 [简体中文](README.zh-CN.md) | English
 
+[![npm version](https://img.shields.io/npm/v/dsh-archived-conversation)](https://www.npmjs.com/package/dsh-archived-conversation)
+[![GitHub release](https://img.shields.io/github/v/release/Li-canghai/dsh-archived-conversation)](https://github.com/Li-canghai/dsh-archived-conversation/releases/latest)
+
 An **archived-conversation manager** plugin for DeepSeek Harness (DSH). It adds a **Settings → 已归档 (Archived)** page where archived conversations can be searched, browsed by project, unarchived, or deleted.
 
 DSH already ships the *archive* capability (right-click a conversation in the left sidebar → Archive; the conversation disappears from the workspace view and its id is written to `archivedSessionIds` in `~/.dsh/storages/workspace.json`). But DSH currently has **no** management UI for archived conversations and **no** unarchive / delete entry point — this plugin fills that gap.
@@ -25,14 +28,43 @@ DSH already ships the *archive* capability (right-click a conversation in the le
   - `ctx.sessionPersistence.readFrom` — reads each archived session's log and folds its last `session/title` event (the same logic as DSH's own "title" projection unit; `sessionQuery.readTitleSnapshots` is unreliable for cold persisted sessions).
   - `ctx.webServer` — mounts the management API.
 - Guard rails: mutation requests require a same-origin Origin, JSON Content-Type, and loopback Host; a running session is queued instead of torn down mid-turn. An idle attached session is released, then deleted.
+- Title lookup is compatible with DSH `0.1.2-alpha.1`: it uses only `cachedSnapshot(header)`, then one persistence read. It does not call `coldSnapshot(id)`, whose signature changed in that release.
 
-## Install
+## Install / Update
+
+Requires [DeepSeek Harness](https://www.deepseek.com/harness/) and **pnpm** on PATH (`dsh plugin` forwards to it).
+
+Install:
 
 ```sh
-npx -p @deepseek-ai/dsh dsh plugin --profile web add <path-or-repo>
+dsh plugin --profile web add dsh-archived-conversation@latest
 ```
 
-Then restart `dsh --profile web` and reload the page. The plugin self-activates through `dsh.bundle.patch`; no manual `cordis.patch.yml` edits needed.
+If `dsh` is not on PATH:
+
+```sh
+npx -y --package @deepseek-ai/dsh dsh plugin --profile web add dsh-archived-conversation@latest
+```
+
+Update:
+
+```sh
+dsh plugin --profile web update dsh-archived-conversation@latest
+```
+
+Then restart `dsh --profile web` and reload the page. The plugin self-activates through `dsh.bundle.patch`; no manual `cordis.patch.yml` edits needed. This plugin has no native build scripts, so `pnpm approve-builds` is not required.
+
+If pnpm 11 reports `minimum release age` (the version is younger than 24h), pin the exact version:
+
+```sh
+dsh plugin --profile web add dsh-archived-conversation@0.2.4
+```
+
+GitHub Release tarball (prebuilt, no npm):
+
+```sh
+dsh plugin --profile web add https://github.com/Li-canghai/dsh-archived-conversation/releases/latest/download/dsh-archived-conversation.tgz
+```
 
 ## Usage
 

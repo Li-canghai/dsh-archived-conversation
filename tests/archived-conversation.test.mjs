@@ -2,7 +2,8 @@
 //
 // Loads the real plugin module with a mocked ctx against a temp sandbox and
 // verifies the A+B+C+D performance-optimization contract:
-//   1. cold start (no persistent cache): titles resolved, cache file written
+//   1. cold start (no persistent cache): titles resolved without calling the
+//      version-dependent projection-cache coldSnapshot contract
 //   2. "restart" (fresh module, persistent cache present): titles served with
 //      ZERO slow-path calls (coldSnapshot/readFrom never invoked)
 //   3. log fingerprint change: re-read but served via the projcache fast path
@@ -71,9 +72,11 @@ const projectionCache = {
     const t = projTitles[header?.id];
     return t ? { values: { title: t } } : undefined;
   },
-  coldSnapshot: async () => {
+  coldSnapshot: async (meta, events) => {
     coldSnapshotCalls++;
-    return undefined; // no title via projection
+    assert.equal(typeof meta, "object", "alpha coldSnapshot requires a SessionHeader");
+    assert.ok(Array.isArray(events), "alpha coldSnapshot requires the complete event list");
+    return undefined;
   },
 };
 
@@ -200,7 +203,7 @@ test("冷启动:无持久化缓存时解析标题并写盘", async () => {
   assert.equal(byId[IDS.B].title, "项目B标题", "B 走慢路径(readFrom)");
   assert.equal(byId[IDS.C].title, "项目C标题", "C 无目录也由 projcache 提供");
   assert.equal(readFromCalls, 1, "readFrom 只对 B 调用一次");
-  assert.equal(coldSnapshotCalls, 1, "coldSnapshot 只对 B 调用一次");
+  assert.equal(coldSnapshotCalls, 0, "不得调用版本间签名不兼容的 coldSnapshot");
   assert.equal(registryListCalls, 1, "列表重建只枚举一次 workspace");
 
   // wait for the debounced title-cache write

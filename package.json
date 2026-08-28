@@ -1,12 +1,22 @@
 {
   "name": "dsh-archived-conversation",
   "description": "Archived-conversation manager for DeepSeek Harness: search, browse, unarchive, and delete archived conversations in Settings → 已归档.",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "type": "module",
   "main": "lib/index.js",
+  "author": "Sichi Li",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Li-canghai/dsh-archived-conversation.git"
+  },
+  "homepage": "https://github.com/Li-canghai/dsh-archived-conversation#readme",
+  "bugs": {
+    "url": "https://github.com/Li-canghai/dsh-archived-conversation/issues"
+  },
   "scripts": {
     "test": "node --test",
-    "check": "node --check lib/index.js && node --check lib/client.js && node --test"
+    "check": "node --check lib/index.js && node --check lib/client.js && node --test",
+    "prepublishOnly": "npm test"
   },
   "exports": {
     ".": "./lib/index.js",
@@ -31,11 +41,16 @@
     "cordis"
   ],
   "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=20"
+  },
   "dsh": {
     "client": {
       "platform": "web",
       "inject": [
-        "@deepseek-ai/dsh-client-runtime",
         "@deepseek-ai/dsh-client-ui-settings"
       ]
     },

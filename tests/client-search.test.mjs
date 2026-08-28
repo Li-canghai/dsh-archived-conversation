@@ -19,6 +19,7 @@ const sandbox = {
 const clientPath = new URL("../lib/client.js", import.meta.url);
 vm.runInNewContext(readFileSync(clientPath, "utf8"), sandbox, { filename: clientPath.pathname });
 const plain = (value) => JSON.parse(JSON.stringify(value));
+const packageJson = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
 
 const groups = [
   {
@@ -39,6 +40,12 @@ const groups = [
 test("搜索功能保持客户端插件入口兼容", () => {
   assert.equal(typeof clientExports.apply, "function");
   assert.deepEqual(Array.from(clientExports.inject), ["slots"]);
+});
+
+test("alpha 客户端清单不再引用已移除的 runtime 包", () => {
+  const ordering = packageJson.dsh.client.inject;
+  assert.ok(!ordering.includes("@deepseek-ai/dsh-client-runtime"));
+  assert.ok(ordering.includes("@deepseek-ai/dsh-client-ui-settings"));
 });
 
 test("空查询返回全部归档会话且不复制列表", () => {

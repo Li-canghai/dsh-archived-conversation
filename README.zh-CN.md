@@ -2,6 +2,9 @@
 
 [简体中文](README.zh-CN.md) | English
 
+[![npm version](https://img.shields.io/npm/v/dsh-archived-conversation)](https://www.npmjs.com/package/dsh-archived-conversation)
+[![GitHub release](https://img.shields.io/github/v/release/Li-canghai/dsh-archived-conversation)](https://github.com/Li-canghai/dsh-archived-conversation/releases/latest)
+
 DeepSeek Harness (DSH) 的**已归档对话管理器**插件。它在 **设置 → 已归档** 中按项目分组列出所有已归档对话,并支持**搜索**、**取消归档**与**删除**。
 
 DSH 本身已经提供"归档"能力(在左侧会话树右键会话即可归档,归档后从工作区视图消失,记录写入 `~/.dsh/storages/workspace.json` 的 `archivedSessionIds`)。但 DSH 目前**没有**已归档对话的管理界面,也没有"取消归档 / 删除已归档"的入口——本插件正是填补这一空缺。
@@ -25,14 +28,43 @@ DSH 本身已经提供"归档"能力(在左侧会话树右键会话即可归档,
   - `ctx.sessionPersistence.readFrom` —— 直读会话日志并折叠最后一条 `session/title` 事件(与 DSH 自身的"title"投影单元同逻辑;`sessionQuery.readTitleSnapshots` 对冷会话不可靠)。
   - `ctx.webServer` —— 挂载管理 API。
 - 安全护栏:变更请求要求同源 Origin、JSON Content-Type 和 loopback Host;正在执行任务的会话会延迟删除。空闲但已挂起的会话会释放后立即删除。
+- 标题读取兼容 DSH `0.1.2-alpha.1`:只走 `cachedSnapshot(header)`,未命中则一次 persistence 读取。不再调用该版本已改签名的 `coldSnapshot(id)`。
 
-## 安装
+## 安装 / 更新
+
+需要已安装 [DeepSeek Harness](https://www.deepseek.com/harness/),且 PATH 上有 **pnpm**(`dsh plugin` 会转调它)。
+
+安装:
 
 ```sh
-npx -p @deepseek-ai/dsh dsh plugin --profile web add <本仓库路径或 git 地址>
+dsh plugin --profile web add dsh-archived-conversation@latest
 ```
 
-随后重启 `dsh --profile web` 并刷新页面。插件通过 `dsh.bundle.patch` 自动激活,无需手动编辑 `cordis.patch.yml`。
+若没有全局 `dsh`:
+
+```sh
+npx -y --package @deepseek-ai/dsh dsh plugin --profile web add dsh-archived-conversation@latest
+```
+
+更新已安装的插件:
+
+```sh
+dsh plugin --profile web update dsh-archived-conversation@latest
+```
+
+随后重启 `dsh --profile web` 并刷新页面。插件通过 `dsh.bundle.patch` 自动激活,无需手动编辑 `cordis.patch.yml`。本插件无原生构建脚本,不必 `pnpm approve-builds`。
+
+若 pnpm 11 提示 `minimum release age`(版本发布不足 24 小时),改为钉死版本:
+
+```sh
+dsh plugin --profile web add dsh-archived-conversation@0.2.4
+```
+
+也可从 GitHub Release 安装预构建包(不走 npm):
+
+```sh
+dsh plugin --profile web add https://github.com/Li-canghai/dsh-archived-conversation/releases/latest/download/dsh-archived-conversation.tgz
+```
 
 ## 使用
 
