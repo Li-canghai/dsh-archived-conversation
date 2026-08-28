@@ -24,7 +24,7 @@ DSH 本身已经提供"归档"能力(在左侧会话树右键会话即可归档,
   - `ctx.workspaceRegistry` —— 归档状态与项目归属的权威来源。
   - `ctx.sessionPersistence.readFrom` —— 直读会话日志并折叠最后一条 `session/title` 事件(与 DSH 自身的"title"投影单元同逻辑;`sessionQuery.readTitleSnapshots` 对冷会话不可靠)。
   - `ctx.webServer` —— 挂载管理 API。
-- 安全护栏:变更请求要求同源 Origin、JSON Content-Type 和 loopback Host;仍在使用的会话会延迟删除,避免破坏正在进行的会话。
+- 安全护栏:变更请求要求同源 Origin、JSON Content-Type 和 loopback Host;正在执行任务的会话会延迟删除。空闲但已挂起的会话会释放后立即删除。
 
 ## 安装
 
@@ -53,7 +53,7 @@ npx -p @deepseek-ai/dsh dsh plugin --profile web add <本仓库路径或 git 地
 
 ## 目录结构
 
-```
+```text
 dsh-archived-conversation/
   package.json        # 声明 dsh.client.inject 与 dsh.bundle.patch
   cordis.patch.yml    # 插件行(由 bundle.patch 激活)

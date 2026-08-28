@@ -87,15 +87,18 @@ let m2 = null;
 function makeCtx(opts = {}) {
   const detachSession = opts.detachSession || (async () => {});
   const readSessionHeader = opts.readSessionHeader || (async (id) => ({ id, createdAt: 1, cwd: "/proj" }));
+  const archivedIds = opts.archivedIds || [IDS.A, IDS.B, IDS.C];
+  const wsPath = opts.wsPath || "/proj";
+  const extraGet = opts.get || {};
   const wsState = {
-    archivedSessionIds: [IDS.A, IDS.B, IDS.C],
+    archivedSessionIds: [...archivedIds],
   };
   const registry = {
     archivedSessionIds: wsState.archivedSessionIds,
     list: () => {
       registryListCalls++;
       return [
-        { id: "w1", record: { id: "w1", title: "proj", path: "/proj" }, sessionIds: [IDS.A, IDS.B, IDS.C] },
+        { id: "w1", record: { id: "w1", title: "proj", path: wsPath }, sessionIds: [...archivedIds] },
       ];
     },
     readSessionHeader: async (id) => {
@@ -110,12 +113,12 @@ function makeCtx(opts = {}) {
     get: () => ({ detachSession }),
   };
   return {
-    get: (name) =>
-      name === "sessions"
-        ? new Map()
-        : name === "sessionProjectionCache"
-          ? projectionCache
-          : undefined,
+    get: (name) => {
+      if (Object.hasOwn(extraGet, name)) return extraGet[name];
+      if (name === "sessions") return new Map();
+      if (name === "sessionProjectionCache") return projectionCache;
+      return undefined;
+    },
     workspaceRegistry: registry,
     sessionPersistence: {
       list: async () => [],
@@ -135,6 +138,13 @@ function makeCtx(opts = {}) {
     emit: () => {},
     effect: (fn) => {
       effects.push(fn);
+    },
+    inject: (names, callback) => {
+      if (!Array.isArray(names) || typeof callback !== "function") return;
+      if (!names.includes("agents")) return;
+      const agents = extraGet.agents;
+      if (agents === undefined) return;
+      callback({ agents });
     },
   };
 }
@@ -357,4 +367,227 @@ test("同源守卫: Origin 必须匹配 Host,且仅接受 loopback", async () =>
   assert.equal(m.isJsonContentType({ headers: { "content-type": "application/json; charset=utf-8" } }), true);
   assert.equal(m.resolveGuiOrigin({ headers: { host: GUI_HOST } }, 3080), GUI_ORIGIN);
   assert.equal(m.resolveGuiOrigin({ headers: { host: "192.168.1.8:3080" } }, 3080), null);
+});
+
+function makeLedgerSpy(targetId) {
+  const deleted = [];
+  const points = [
+    { id: "rp_keep_other", kind: "turn", sessionId: "session-other", workspace: "/proj" },
+    { id: "rp_turn_target", kind: "turn", sessionId: targetId, workspace: "/proj" },
+    { id: "rp_rescue_target", kind: "rescue", sessionId: targetId, workspace: "/proj" },
+    { id: "rp_user_nosession", kind: "user", workspace: "/proj" },
+  ];
+  return {
+    deleted,
+    listCalls: [],
+    async list(options) {
+      this.listCalls.push(options);
+      return points.filter((p) => !deleted.includes(p.id));
+    },
+    async delete(options) {
+      deleted.push(options.restorePointId);
+      return { restorePointId: options.restorePointId, deletedBlobs: 1, retainedBlobs: 0 };
+    },
+  };
+}
+
+test("删除归档对话时清掉该会话的 rewind 检查点与 review 快照", async () => {
+  const sid = "session-purge0000-0000-0000-0000-000000000001";
+  makeSession(sid, 64);
+  const ledger = makeLedgerSpy(sid);
+  const forgotten = [];
+  const m = await freshModule();
+  m.apply(makeCtx({
+    archivedIds: [sid],
+    get: {
+      changeLedger: ledger,
+      turnReview: { forget: (id) => forgotten.push(id) },
+    },
+  }));
+  const body = await callDelete(sid);
+  assert.equal(body.ok, true);
+  assert.equal(ledger.listCalls.length, 1);
+  assert.equal(ledger.listCalls[0].cwd, "/proj");
+  assert.equal(ledger.listCalls[0].includeRescue, true);
+  assert.equal(ledger.listCalls[0].includeTurnCheckpoints, true);
+  assert.deepEqual(ledger.deleted.sort(), ["rp_rescue_target", "rp_turn_target"]);
+  assert.equal(ledger.deleted.includes("rp_keep_other"), false);
+  assert.equal(ledger.deleted.includes("rp_user_nosession"), false);
+  assert.deepEqual(forgotten, [sid]);
+});
+
+test("优先走 changeLedger.deleteBySession", async () => {
+  const sid = "session-purge0000-0000-0000-0000-000000000006";
+  makeSession(sid, 64);
+  const calls = [];
+  const forgotten = [];
+  const m = await freshModule();
+  m.apply(makeCtx({
+    archivedIds: [sid],
+    get: {
+      changeLedger: {
+        async deleteBySession(options) {
+          calls.push(options);
+          return { deletedRestorePoints: 2, deletedOperations: 0, deletedSkips: 0 };
+        },
+        async list() { throw new Error("list should not run"); },
+        async delete() { throw new Error("delete should not run"); },
+      },
+      turnReview: { forget: (id) => forgotten.push(id) },
+    },
+  }));
+  const body = await callDelete(sid);
+  assert.equal(body.ok, true);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].sessionId, sid);
+  assert.equal(calls[0].cwd, "/proj");
+  assert.deepEqual(forgotten, [sid]);
+});
+
+test("删除 rewind 检查点时 confirmation 必须是 DELETE <id>", async () => {
+  const sid = "session-purge0000-0000-0000-0000-000000000002";
+  makeSession(sid, 64);
+  const confirmations = [];
+  const m = await freshModule();
+  m.apply(makeCtx({
+    archivedIds: [sid],
+    get: {
+      changeLedger: {
+        async list() {
+          return [{ id: "rp_one", kind: "turn", sessionId: sid, workspace: "/proj" }];
+        },
+        async delete(options) {
+          confirmations.push(options);
+          return { restorePointId: options.restorePointId, deletedBlobs: 0, retainedBlobs: 0 };
+        },
+      },
+    },
+  }));
+  const body = await callDelete(sid);
+  assert.equal(body.ok, true);
+  assert.equal(confirmations.length, 1);
+  assert.equal(confirmations[0].restorePointId, "rp_one");
+  assert.equal(confirmations[0].confirmation, "DELETE rp_one");
+  assert.equal(confirmations[0].cwd, "/proj");
+});
+
+test("取消归档不清 rewind 检查点也不 forget review 快照", async () => {
+  const sid = "session-purge0000-0000-0000-0000-000000000003";
+  makeSession(sid, 64);
+  let listCalls = 0;
+  let forgetCalls = 0;
+  const m = await freshModule();
+  m.apply(makeCtx({
+    archivedIds: [sid],
+    get: {
+      changeLedger: {
+        async list() { listCalls++; return []; },
+        async delete() { throw new Error("delete should not run"); },
+      },
+      turnReview: { forget: () => { forgetCalls++; } },
+    },
+  }));
+  const body = await callUnarchive(sid);
+  assert.equal(body.ok, true);
+  assert.equal(listCalls, 0);
+  assert.equal(forgetCalls, 0);
+  assert.ok(existsSync(join(sessionsBase, "--proj--", sid)), "取消归档不得删除会话目录");
+});
+
+test("sidecar 清理失败不阻断会话删除", async () => {
+  const sid = "session-purge0000-0000-0000-0000-000000000004";
+  makeSession(sid, 64);
+  const dir = join(sessionsBase, "--proj--", sid);
+  const m = await freshModule();
+  m.apply(makeCtx({
+    archivedIds: [sid],
+    get: {
+      changeLedger: {
+        async deleteBySession() { throw new Error("ledger boom"); },
+        async list() { throw new Error("ledger boom"); },
+        async delete() { throw new Error("delete boom"); },
+      },
+      turnReview: { forget: () => { throw new Error("forget boom"); } },
+    },
+  }));
+  const body = await callDelete(sid);
+  assert.equal(body.ok, true);
+  assert.ok(!existsSync(dir), "会话目录仍应删除");
+});
+
+test("无 changeLedger / turnReview 时删除仍成功", async () => {
+  const sid = "session-purge0000-0000-0000-0000-000000000005";
+  makeSession(sid, 64);
+  const m = await freshModule();
+  m.apply(makeCtx({ archivedIds: [sid] }));
+  const body = await callDelete(sid);
+  assert.equal(body.ok, true);
+  assert.ok(!existsSync(join(sessionsBase, "--proj--", sid)));
+});
+
+test("attached 会话在只有 scope.dispose 时仍排队", async () => {
+  const sid = "session-attached000-0000-0000-0000-000000000001";
+  makeSession(sid, 64);
+  const dir = join(sessionsBase, "--proj--", sid);
+  const sessions = new Map([[sid, { id: sid }]]);
+  const agent = {
+    id: sid,
+    status: "idle",
+    scope: { dispose: async () => {} },
+  };
+  process.env.ARCHIVED_CONV_VERIFY_STEP_MS = "0";
+  try {
+    const m = await freshModule();
+    m.apply(makeCtx({
+      archivedIds: [sid],
+      get: {
+        sessions: { get: (id) => sessions.get(id) },
+        agents: { get: (id) => (id === sid ? agent : undefined) },
+      },
+    }));
+    const r = await call("DELETE", `/archived-conversation/api/${sid}`, JSON_HEADERS);
+    assert.equal(r.status, 200);
+    assert.equal(r.body.ok, false);
+    assert.equal(r.body.queued, true);
+    assert.match(r.body.error, /仍在使用中/);
+    assert.ok(existsSync(dir), "未释放时不得删除会话目录");
+  } finally {
+    delete process.env.ARCHIVED_CONV_VERIFY_STEP_MS;
+  }
+});
+
+test("捕获 AgentHandle.dispose 后可直接删除仍挂起的空闲会话", async () => {
+  const sid = "session-attached000-0000-0000-0000-000000000002";
+  makeSession(sid, 64);
+  const dir = join(sessionsBase, "--proj--", sid);
+  const sessions = new Map([[sid, { id: sid }]]);
+  const agent = {
+    id: sid,
+    status: "idle",
+    scope: { dispose: async () => {} },
+  };
+  const handle = {
+    agent,
+    dispose: async () => {
+      sessions.delete(sid);
+    },
+  };
+  const agents = {
+    get: (id) => (id === sid ? agent : undefined),
+    create: async () => handle,
+    resume: async () => handle,
+  };
+  const m = await freshModule();
+  m.apply(makeCtx({
+    archivedIds: [sid],
+    get: {
+      sessions: { get: (id) => sessions.get(id) },
+      agents,
+    },
+  }));
+  await agents.resume({ resumeSessionId: sid });
+  const body = await callDelete(sid);
+  assert.equal(body.ok, true);
+  assert.equal(sessions.has(sid), false);
+  assert.ok(!existsSync(dir), "释放后应删除会话目录");
 });

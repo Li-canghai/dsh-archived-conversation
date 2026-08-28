@@ -24,7 +24,7 @@ DSH already ships the *archive* capability (right-click a conversation in the le
   - `ctx.workspaceRegistry` — the authority on archive state and project membership.
   - `ctx.sessionPersistence.readFrom` — reads each archived session's log and folds its last `session/title` event (the same logic as DSH's own "title" projection unit; `sessionQuery.readTitleSnapshots` is unreliable for cold persisted sessions).
   - `ctx.webServer` — mounts the management API.
-- Guard rails: mutation requests require a same-origin Origin, JSON Content-Type, and loopback Host; sessions still in use are queued for deferred deletion instead of being corrupted.
+- Guard rails: mutation requests require a same-origin Origin, JSON Content-Type, and loopback Host; a running session is queued instead of torn down mid-turn. An idle attached session is released, then deleted.
 
 ## Install
 
@@ -53,7 +53,7 @@ Then restart `dsh --profile web` and reload the page. The plugin self-activates 
 
 ## Layout
 
-```
+```text
 dsh-archived-conversation/
   package.json        # dsh.client.inject + dsh.bundle.patch
   cordis.patch.yml    # plugin row (activated by bundle.patch)
