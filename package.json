@@ -4,19 +4,9 @@
   "version": "0.2.4",
   "type": "module",
   "main": "lib/index.js",
-  "author": "Sichi Li",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/Li-canghai/dsh-archived-conversation.git"
-  },
-  "homepage": "https://github.com/Li-canghai/dsh-archived-conversation#readme",
-  "bugs": {
-    "url": "https://github.com/Li-canghai/dsh-archived-conversation/issues"
-  },
   "scripts": {
     "test": "node --test",
-    "check": "node --check lib/index.js && node --check lib/client.js && node --test",
-    "prepublishOnly": "npm test"
+    "check": "node --check lib/index.js && node --check lib/client.js && node --test"
   },
   "exports": {
     ".": "./lib/index.js",
@@ -41,12 +31,6 @@
     "cordis"
   ],
   "license": "MIT",
-  "publishConfig": {
-    "access": "public"
-  },
-  "engines": {
-    "node": ">=20"
-  },
   "dsh": {
     "client": {
       "platform": "web",

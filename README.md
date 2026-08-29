@@ -15,7 +15,20 @@ DSH already ships the *archive* capability (right-click a conversation in the le
 - **Instant search** — filters archived conversations by title, project name, or session ID in the browser, without additional session-log reads.
 - **Unarchive** — removes the id from `archivedSessionIds`; the conversation returns to its original position in its workspace.
 - **Delete** — detaches from the workspace, drops from the archive set, and removes the on-disk session directory (irreversible).
+- **OpenViking delete linkage** (0.2.4+) — when an archived conversation is deleted, the matching OpenViking session record (`dsh-<session-id>`, including un-refined content) is deleted too; **refined long-term memories are never touched**.
 - Auto-refreshes every 20 seconds and immediately whenever the window regains focus.
+
+## OpenViking delete linkage (0.2.4+)
+
+- **Behavior**: the delete confirmation dialog notes that the OpenViking session record and un-refined content will be removed; after a successful local delete, the result area shows the OpenViking cleanup status:
+  - `deleted` → OpenViking record deleted
+  - `queued` → cleanup failed for now; queued and retried at next DSH start / settings page open
+  - `skipped` → OpenViking not configured; local-only delete
+- **Failure safety**: with credentials present, a failed delete request (network/server) is recorded in `~/.dsh/archived-conversation-ov-pending.json` and replayed at **boot, on the 20s timer, and when the settings page opens** until it succeeds (404 counts as success); failures persist without ever blocking the local delete.
+- **Not configured** (no `OPENVIKING_*` env or `~/.openviking/ovcli.conf` api_key) → **zero linkage**: no delete, no queue, no error.
+- **Switch**: env `DSH_ARCHIVED_CONVERSATION_OV_LINK` (default `true`; `0` or `false` disables linkage and replay).
+- **Credential chain** (same as `@openviking/dsh-memory-plugin`): `OPENVIKING_URL`/`OPENVIKING_API_KEY`/`OPENVIKING_ACCOUNT`/`OPENVIKING_USER` env → `~/.openviking/ovcli.conf` → default endpoint `http://127.0.0.1:1933`.
+- **Boundary**: target is only the OpenViking session subtree (`DELETE /api/v1/sessions/dsh-<id>`); refined memories under `memories/` are never touched.
 
 ## How it works
 
@@ -90,6 +103,7 @@ dsh-archived-conversation/
   package.json        # dsh.client.inject + dsh.bundle.patch
   cordis.patch.yml    # plugin row (activated by bundle.patch)
   lib/index.js        # host: API + archive-state read/write
+  lib/ov-delete.mjs   # host: OpenViking session-delete linkage (credentials + pending-queue replay)
   lib/client.js       # client: Settings "已归档" UI
   README.md / README.zh-CN.md / LICENSE
 ```
@@ -97,3 +111,13 @@ dsh-archived-conversation/
 ## Verification
 
 No build step. After installing into a live web profile, open **Settings → 已归档** in the browser. Host liveness: `GET /archived-conversation/api/ping`.
+
+## Local development and deployment
+
+Local status (2026-08-29): source and deployment copies are both `0.2.4`; the web profile is registered through `link:/home/canghai/.dsh/plugins/dsh-archived-conversation`.
+
+The development checkout is `/home/canghai/Project/DSH/Plugins/dsh-archived-conversation`; DSH loads only the self-contained copy at `~/.dsh/plugins/dsh-archived-conversation`. The host must keep `workspaceRegistry`, `sessionQuery`, `sessionPersistence`, and `webServer` in `inject`. It uses DSH services instead of decoding `session.jsonl.zstd` directly.
+
+Deletion is deliberately conservative: archived IDs are updated through `workspaceRegistry.enqueueOperation`; attached sessions enter the delayed-delete queue; sidecars owned by Turn Review and Turn Rewind are purged through their public services when available. Closing a tab is not conversation deletion.
+
+After editing, run `npm test` plus `node --check lib/index.js lib/client.js`, copy the managed package files into the deployment directory without hand-editing that directory, register it explicitly, restart `dsh web`, and verify both the ping endpoint and Settings → 已归档. The deployment directory must contain `node_modules/`, even though the plugin has no runtime dependencies.

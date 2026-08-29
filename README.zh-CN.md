@@ -15,7 +15,20 @@ DSH 本身已经提供"归档"能力(在左侧会话树右键会话即可归档,
 - **即时搜索**:按对话标题、项目名或会话 ID 过滤已归档对话;搜索在浏览器本地完成,不会增加会话日志读取。
 - **取消归档**:把对话从 `archivedSessionIds` 移除,对话会回到原工作区的原位置。
 - **删除**:从工作区与会话注册表中移除,并删除磁盘上的会话目录(不可恢复)。
+- **OpenViking 删除联动**(0.2.4+):删除已归档会话时,同步删除 OpenViking 中对应的会话原始记录(`dsh-<会话ID>`,含未提炼内容);**已提炼的长期记忆不受影响**。
 - 设置页每 20 秒自动刷新,窗口重新获得焦点时也会立即刷新。
+
+### OpenViking 删除联动(0.2.4+)
+
+- **行为**:删除确认弹窗会显示"将同时删除 OpenViking 中该会话的记录与未提炼内容";删除成功后,结果区展示 OpenViking 清理状态:
+  - `deleted` → 已同步删除 OpenViking 会话记录
+  - `queued` → 清理暂时失败,已排队,下次 DSH 启动/设置页打开时自动重试
+  - `skipped` → 未配置 OpenViking,仅删除本地会话
+- **失败兜底**:有 OpenViking 凭证时,若删除请求失败(网络/服务异常),记录进本地待删队列 `~/.dsh/archived-conversation-ov-pending.json`,在**启动时、20 秒定时、设置页打开**时自动补删直到成功(404 视为成功);失败持久保留,不阻塞本地删除。
+- **未配置 OpenViking**(读不到 `OPENVIKING_*` 环境变量或 `~/.openviking/ovcli.conf` 的 api_key)→ **零联动**:不删除、不排队、不报错。
+- **开关**:环境变量 `DSH_ARCHIVED_CONVERSATION_OV_LINK`(默认 `true`;设为 `0` 或 `false` 关闭联动与补删)。
+- **凭证解析链**(与 `@openviking/dsh-memory-plugin` 一致):`OPENVIKING_URL`/`OPENVIKING_API_KEY`/`OPENVIKING_ACCOUNT`/`OPENVIKING_USER` 环境变量 → `~/.openviking/ovcli.conf` → 默认端点 `http://127.0.0.1:1933`。
+- **边界**:目标仅 OpenViking 会话子树(`DELETE /api/v1/sessions/dsh-<id>`);`memories/` 下已提炼记忆永不触碰。
 
 ## 实现要点
 
@@ -90,6 +103,7 @@ dsh-archived-conversation/
   package.json        # 声明 dsh.client.inject 与 dsh.bundle.patch
   cordis.patch.yml    # 插件行(由 bundle.patch 激活)
   lib/index.js        # 宿主端:API + 归档状态读写
+  lib/ov-delete.mjs   # 宿主端:OpenViking 会话删除联动(凭证解析 + 待删队列补删)
   lib/client.js       # 客户端:设置页"已归档"界面
   README.md / README.zh-CN.md / LICENSE
 ```
