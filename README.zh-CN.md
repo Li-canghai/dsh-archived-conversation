@@ -1,6 +1,6 @@
 # dsh-archived-conversation
 
-[简体中文](README.zh-CN.md) | English
+简体中文 | [English](README.md)
 
 [![npm version](https://img.shields.io/npm/v/dsh-archived-conversation)](https://www.npmjs.com/package/dsh-archived-conversation)
 [![GitHub release](https://img.shields.io/github/v/release/Li-canghai/dsh-archived-conversation)](https://github.com/Li-canghai/dsh-archived-conversation/releases/latest)
@@ -24,7 +24,7 @@ DSH 本身已经提供"归档"能力(在左侧会话树右键会话即可归档,
   - `deleted` → 已同步删除 OpenViking 会话记录
   - `queued` → 清理暂时失败,已排队,下次 DSH 启动/设置页打开时自动重试
   - `skipped` → 未配置 OpenViking,仅删除本地会话
-- **失败兜底**:有 OpenViking 凭证时,若删除请求失败(网络/服务异常),记录进本地待删队列 `~/.dsh/archived-conversation-ov-pending.json`,在**启动时、20 秒定时、设置页打开**时自动补删直到成功(404 视为成功);失败持久保留,不阻塞本地删除。
+- **失败兜底**:有 OpenViking 凭证时,若删除请求失败(网络/服务异常),记录进本地待删队列 `~/.dsh/runtime/dsh-archived-conversation/archived-conversation-ov-pending.json`,在**启动时、20 秒定时、设置页打开**时自动补删直到成功(404 视为成功);失败持久保留,不阻塞本地删除。
 - **未配置 OpenViking**(读不到 `OPENVIKING_*` 环境变量或 `~/.openviking/ovcli.conf` 的 api_key)→ **零联动**:不删除、不排队、不报错。
 - **开关**:环境变量 `DSH_ARCHIVED_CONVERSATION_OV_LINK`(默认 `true`;设为 `0` 或 `false` 关闭联动与补删)。
 - **凭证解析链**(与 `@openviking/dsh-memory-plugin` 一致):`OPENVIKING_URL`/`OPENVIKING_API_KEY`/`OPENVIKING_ACCOUNT`/`OPENVIKING_USER` 环境变量 → `~/.openviking/ovcli.conf` → 默认端点 `http://127.0.0.1:1933`。
@@ -70,7 +70,7 @@ dsh plugin --profile web update dsh-archived-conversation@latest
 若 pnpm 11 提示 `minimum release age`(版本发布不足 24 小时),改为钉死版本:
 
 ```sh
-dsh plugin --profile web add dsh-archived-conversation@0.2.4
+dsh plugin --profile web add dsh-archived-conversation@0.2.5
 ```
 
 也可从 GitHub Release 安装预构建包(不走 npm):
@@ -104,6 +104,7 @@ dsh-archived-conversation/
   cordis.patch.yml    # 插件行(由 bundle.patch 激活)
   lib/index.js        # 宿主端:API + 归档状态读写
   lib/ov-delete.mjs   # 宿主端:OpenViking 会话删除联动(凭证解析 + 待删队列补删)
+  lib/runtime-paths.mjs # 宿主端:运行目录与旧文件迁移
   lib/client.js       # 客户端:设置页"已归档"界面
   README.md / README.zh-CN.md / LICENSE
 ```
@@ -111,3 +112,15 @@ dsh-archived-conversation/
 ## 验证
 
 本插件无需构建步骤。安装到 live web profile 后,在浏览器打开 **设置 → 已归档** 即可验证;宿主 API 探活:`GET /archived-conversation/api/ping`。
+
+## 本地开发与部署
+
+本地状态(2026-09-01):开发源码为 `0.2.5`;验证后未来同步到 `$HOME\.dsh\local-plugins\dsh-archived-conversation` 部署副本,web profile 以 `link:` 引用。源码已按本机 DSH 0.1.2-alpha.3 的实际运行契约核对:删除冷会话时发布文档化的 `api-session/removed(sessionId)` 列表事件,不再用不完整对象伪造要求 `Session` 参数的 `session/disposed(Session)`。
+
+开发目录是 `/home/canghai/Project/DSH/Plugins/dsh-archived-conversation`;DSH 只加载 `~/.dsh/local-plugins/dsh-archived-conversation` 中的自包含副本。宿主端 `inject` 必须保留 `workspaceRegistry`、`sessionPersistence` 和 `webServer`;插件复用 DSH 服务,不直接解析 `session.jsonl.zstd`。
+
+插件自产生的运行状态统一放在 `~/.dsh/runtime/dsh-archived-conversation`;部署包仍位于 `~/.dsh/local-plugins/dsh-archived-conversation`。升级后首次启动时,若目标文件尚不存在,根目录旧文件 `archived-conversation-titles.json`、`archived-conversation-pending.json` 和 `archived-conversation-ov-pending.json` 会自动移入运行目录。
+
+删除采用保守策略:通过 `workspaceRegistry.enqueueOperation` 串行更新归档 ID;已附着会话进入延迟删除队列;可用时通过 Turn Review 与 Turn Rewind 的公开服务清理它们拥有的 sidecar。关闭标签页不等于删除会话。
+
+修改后运行 `npm test`、`node --check lib/index.js && node --check lib/client.js`,再把受管包文件复制到部署目录,不要直接手改部署副本。随后显式注册、重启 `dsh web`,并验证探活接口和 **设置 → 已归档**。部署目录即使零运行时依赖也必须包含 `node_modules/`。

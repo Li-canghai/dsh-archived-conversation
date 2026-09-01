@@ -96,6 +96,7 @@ function makeCtx(opts = {}) {
   const wsState = {
     archivedSessionIds: [...archivedIds],
   };
+  const emitted = [];
   const registry = {
     archivedSessionIds: wsState.archivedSessionIds,
     list: () => {
@@ -138,7 +139,8 @@ function makeCtx(opts = {}) {
       port: 3080,
       register: (def) => { capturedHandler = def.handler; return {}; },
     },
-    emit: () => {},
+    emit: (event, ...args) => { emitted.push([event, ...args]); },
+    emitted,
     effect: (fn) => {
       effects.push(fn);
     },
@@ -290,6 +292,16 @@ test("删除冒烟", async () => {
   assert.equal(body.ok, true);
   assert.ok(!existsSync(join(sessionsBase, "--proj--", IDS.B)), "会话目录已删除");
   assert.ok(!ctx2.workspaceRegistry.requireState().archivedSessionIds.includes(IDS.B), "已从归档集合移除");
+  assert.deepEqual(
+    ctx2.emitted.filter(([event]) => event === "api-session/removed"),
+    [["api-session/removed", IDS.B]],
+    "冷会话删除只向 API 会话列表发布精确的 session id",
+  );
+  assert.equal(
+    ctx2.emitted.some(([event]) => event === "session/disposed"),
+    false,
+    "不得用 { id } 伪造要求完整 Session 的宿主生命周期事件",
+  );
 });
 
 test("GET /ping 无 Origin 仍为 200", async () => {

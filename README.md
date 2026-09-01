@@ -24,7 +24,7 @@ DSH already ships the *archive* capability (right-click a conversation in the le
   - `deleted` → OpenViking record deleted
   - `queued` → cleanup failed for now; queued and retried at next DSH start / settings page open
   - `skipped` → OpenViking not configured; local-only delete
-- **Failure safety**: with credentials present, a failed delete request (network/server) is recorded in `~/.dsh/archived-conversation-ov-pending.json` and replayed at **boot, on the 20s timer, and when the settings page opens** until it succeeds (404 counts as success); failures persist without ever blocking the local delete.
+- **Failure safety**: with credentials present, a failed delete request (network/server) is recorded in `~/.dsh/runtime/dsh-archived-conversation/archived-conversation-ov-pending.json` and replayed at **boot, on the 20s timer, and when the settings page opens** until it succeeds (404 counts as success); failures persist without ever blocking the local delete.
 - **Not configured** (no `OPENVIKING_*` env or `~/.openviking/ovcli.conf` api_key) → **zero linkage**: no delete, no queue, no error.
 - **Switch**: env `DSH_ARCHIVED_CONVERSATION_OV_LINK` (default `true`; `0` or `false` disables linkage and replay).
 - **Credential chain** (same as `@openviking/dsh-memory-plugin`): `OPENVIKING_URL`/`OPENVIKING_API_KEY`/`OPENVIKING_ACCOUNT`/`OPENVIKING_USER` env → `~/.openviking/ovcli.conf` → default endpoint `http://127.0.0.1:1933`.
@@ -70,7 +70,7 @@ Then restart `dsh --profile web` and reload the page. The plugin self-activates 
 If pnpm 11 reports `minimum release age` (the version is younger than 24h), pin the exact version:
 
 ```sh
-dsh plugin --profile web add dsh-archived-conversation@0.2.4
+dsh plugin --profile web add dsh-archived-conversation@0.2.5
 ```
 
 GitHub Release tarball (prebuilt, no npm):
@@ -104,6 +104,7 @@ dsh-archived-conversation/
   cordis.patch.yml    # plugin row (activated by bundle.patch)
   lib/index.js        # host: API + archive-state read/write
   lib/ov-delete.mjs   # host: OpenViking session-delete linkage (credentials + pending-queue replay)
+  lib/runtime-paths.mjs # host: runtime directory and legacy-file migration
   lib/client.js       # client: Settings "已归档" UI
   README.md / README.zh-CN.md / LICENSE
 ```
@@ -114,10 +115,12 @@ No build step. After installing into a live web profile, open **Settings → 已
 
 ## Local development and deployment
 
-Local status (2026-08-29): source and deployment copies are both `0.2.4`; the web profile is registered through `link:/home/canghai/.dsh/plugins/dsh-archived-conversation`.
+Local status (2026-09-01): source is `0.2.5`; after verification its future deployment copy is `$HOME\.dsh\local-plugins\dsh-archived-conversation`, referenced through `link:`. The source has been checked against DSH 0.1.2-alpha.3's installed runtime contracts: deleting a cold session emits the documented `api-session/removed(sessionId)` list event instead of forging an incomplete object for `session/disposed(Session)`.
 
-The development checkout is `/home/canghai/Project/DSH/Plugins/dsh-archived-conversation`; DSH loads only the self-contained copy at `~/.dsh/plugins/dsh-archived-conversation`. The host must keep `workspaceRegistry`, `sessionQuery`, `sessionPersistence`, and `webServer` in `inject`. It uses DSH services instead of decoding `session.jsonl.zstd` directly.
+The development checkout is `/home/canghai/Project/DSH/Plugins/dsh-archived-conversation`; DSH loads only the self-contained copy at `~/.dsh/local-plugins/dsh-archived-conversation`. The host must keep `workspaceRegistry`, `sessionPersistence`, and `webServer` in `inject`. It uses DSH services instead of decoding `session.jsonl.zstd` directly.
+
+Plugin-owned runtime state lives under `~/.dsh/runtime/dsh-archived-conversation`; the deployment package remains under `~/.dsh/local-plugins/dsh-archived-conversation`. On first start after upgrading, root-level `archived-conversation-titles.json`, `archived-conversation-pending.json`, and `archived-conversation-ov-pending.json` files are moved into the runtime directory when no destination file already exists.
 
 Deletion is deliberately conservative: archived IDs are updated through `workspaceRegistry.enqueueOperation`; attached sessions enter the delayed-delete queue; sidecars owned by Turn Review and Turn Rewind are purged through their public services when available. Closing a tab is not conversation deletion.
 
-After editing, run `npm test` plus `node --check lib/index.js lib/client.js`, copy the managed package files into the deployment directory without hand-editing that directory, register it explicitly, restart `dsh web`, and verify both the ping endpoint and Settings → 已归档. The deployment directory must contain `node_modules/`, even though the plugin has no runtime dependencies.
+After editing, run `npm test` plus `node --check lib/index.js && node --check lib/client.js`, copy the managed package files into the deployment directory without hand-editing that directory, register it explicitly, restart `dsh web`, and verify both the ping endpoint and Settings → 已归档. The deployment directory must contain `node_modules/`, even though the plugin has no runtime dependencies.
