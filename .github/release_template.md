@@ -14,6 +14,12 @@ Update:
 dsh plugin --profile web update dsh-archived-conversation@latest
 ```
 
+If pnpm 11 reports `minimum release age`, pin the exact version:
+
+```sh
+dsh plugin --profile web add dsh-archived-conversation@0.2.5
+```
+
 GitHub Release tarball (no npm):
 
 ```sh
@@ -24,5 +30,5 @@ Restart `dsh --profile web` after installing or updating.
 
 ## What's New
 
-- **DSH 0.1.2-alpha.1 title lookup** — stop calling `sessionProjectionCache.coldSnapshot(id)`, whose signature changed in that release. Titles still use the zero-I/O `cachedSnapshot(header)` fast path, then one persistence read.
-- **Client inject** — drop the unused `@deepseek-ai/dsh-client-runtime` entry from `dsh.client.inject`.
+- **DSH 0.1.2-alpha.3 session delete** — deleting a cold archived session emits the documented `api-session/removed(sessionId)` list event instead of forging an incomplete object for `session/disposed(Session)`.
+- **Runtime state directory** — plugin-owned files (`archived-conversation-titles.json`, `archived-conversation-pending.json`, `archived-conversation-ov-pending.json`) now live under `~/.dsh/runtime/dsh-archived-conversation`; existing root-level files are moved once on upgrade when the destination is empty.
