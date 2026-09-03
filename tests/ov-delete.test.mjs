@@ -1,6 +1,3 @@
-// Unit tests for lib/ov-delete.mjs: credential resolution, DELETE semantics
-// (200 / 404 / retry-queue), pending queue replay, and header fields.
-// All IO is injected: fetchImpl / readFile / store — nothing touches the disk.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -22,7 +19,7 @@ function memoryStore(initial = []) {
   };
 }
 
-const noConf = () => null; // simulate missing ovcli.conf
+const noConf = () => null;
 
 function fakeFetch(responses = []) {
   const calls = [];

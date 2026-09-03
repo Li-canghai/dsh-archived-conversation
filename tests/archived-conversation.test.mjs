@@ -1,19 +1,3 @@
-// Regression tests for dsh-archived-conversation (host half).
-//
-// Loads the real plugin module with a mocked ctx against a temp sandbox and
-// verifies the A+B+C+D performance-optimization contract:
-//   1. cold start (no persistent cache): titles resolved through the
-//      alpha.3/alpha.4 SessionPersistence.inspect contract
-//   2. "restart" (fresh module, persistent cache present): titles served with
-//      ZERO slow-path calls (inspect never invoked)
-//   3. log fingerprint change: re-read but served via the projcache fast path
-//      (still zero decompression), persistent cache fp/title refreshed
-//   4. missing-dir session slot: served from the persistent cache ("missing" fp)
-//   5. unarchive + delete still behave (quick smoke)
-//
-// Run: npm test (node --test tests/)
-// The sandbox lives under the OS temp dir; the real ~/.dsh is never touched
-// (paths are injected through ARCHIVED_CONV_* env vars).
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -46,9 +30,9 @@ const JSON_HEADERS = {
 };
 
 const IDS = {
-  A: "session-aaaa0000-0000-0000-0000-00000000000a", // big log, projcache hit
-  B: "session-bbbb0000-0000-0000-0000-00000000000b", // big log, projcache miss -> slow path
-  C: "session-cccc0000-0000-0000-0000-00000000000c", // dir missing entirely
+  A: "session-aaaa0000-0000-0000-0000-00000000000a",
+  B: "session-bbbb0000-0000-0000-0000-00000000000b",
+  C: "session-cccc0000-0000-0000-0000-00000000000c",
   CHILD: "session-child000-0000-0000-0000-000000000001",
 };
 
@@ -59,9 +43,7 @@ function makeSession(id, bytes) {
 }
 makeSession(IDS.A, 1024 * 1024);
 makeSession(IDS.B, 2 * 1024 * 1024);
-// C has no dir on disk.
 
-// ---- counters for slow paths ----
 let inspectCalls = 0;
 let registryListCalls = 0;
 let headerCalls = 0;
@@ -76,7 +58,6 @@ const projectionCache = {
 
 let capturedHandler = null;
 const effects = [];
-// cross-phase state (stashed module-level, not globalThis)
 let persistedRaw = null;
 let ctx2 = null;
 let m2 = null;
@@ -152,8 +133,6 @@ function makeCtx(opts = {}) {
   };
 }
 
-// Fresh module instance per "restart": a unique query string forces Node to
-// re-evaluate the module so the in-memory caches start empty.
 const pluginUrl = new URL("../lib/index.js", import.meta.url);
 async function freshModule() {
   return import(pluginUrl.href + "?v=" + Math.random());
@@ -190,7 +169,6 @@ after(() => {
   rmSync(sandbox, { recursive: true, force: true });
 });
 
-// ============ Phase 1: cold start (no persistent cache) ============
 test("冷启动:无持久化缓存时解析标题并写盘", async () => {
   registryListCalls = 0;
   const m1 = await freshModule();
@@ -213,11 +191,9 @@ test("冷启动:无持久化缓存时解析标题并写盘", async () => {
     assert.ok(persistedRaw0[id] && typeof persistedRaw0[id].fp === "string", `${id} 已入持久化缓存`);
   }
   assert.equal(persistedRaw0[IDS.C].fp, "missing", "无目录会话指纹为 missing");
-  // stash for later phases
   persistedRaw = persistedRaw0;
 });
 
-// ============ Phase 2: simulated restart (fresh module + persistent cache) ============
 test("模拟重启:持久化缓存在场,零慢路径调用", async () => {
   inspectCalls = 0;
   headerCalls = 0;
@@ -234,14 +210,12 @@ test("模拟重启:持久化缓存在场,零慢路径调用", async () => {
   assert.equal(headerCalls, 0, "持久化标题缓存命中时不读取 session header");
 });
 
-// ============ Phase 3: log fingerprint change ============
 test("日志指纹变化:重读但走 projcache 快路径,零解压,持久化缓存刷新", async () => {
   inspectCalls = 0;
-  // The session gained events: DSH's projection cache now has a fresher title.
   projTitles[IDS.A] = "项目A标题v2";
   const logA = join(sessionsBase, "--proj--", IDS.A, "session.jsonl.zstd");
   const st = statSync(logA);
-  utimesSync(logA, new Date(), new Date(st.mtimeMs + 2000)); // change mtime only
+  utimesSync(logA, new Date(), new Date(st.mtimeMs + 2000));
   const changed = await callList(m2);
   const byId = Object.fromEntries(changed.groups[0].sessions.map((s) => [s.id, s]));
   assert.equal(byId[IDS.A].title, "项目A标题v2", "拾取到更新后的 projcache 标题");
@@ -349,14 +323,12 @@ test("删除归档主对话时按子级优先统一删除完整子代理树", as
   }
 });
 
-// ============ Phase 4: unarchive smoke ============
 test("取消归档冒烟", async () => {
   const body = await callUnarchive(IDS.C);
   assert.equal(body.ok, true);
   assert.equal(ctx2.workspaceRegistry.requireState().archivedSessionIds.length, 2);
 });
 
-// ============ Phase 5: delete (cold session, dir exists) ============
 test("删除冒烟", async () => {
   const body = await callDelete(IDS.B);
   assert.equal(body.ok, true);
