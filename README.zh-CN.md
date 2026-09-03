@@ -12,6 +12,7 @@ DSH 本身已经提供"归档"能力(在左侧会话树右键会话即可归档,
 ## 功能
 
 - **按项目分组**:复用 DSH 的 workspace 信息,把已归档对话归到其所属项目下展示。
+- **子代理会话族**:主对话存在后代时显示可展开箭头;点击整行可查看完整子代理树。子项只读,取消归档与删除统一由主对话管理。
 - **即时搜索**:按对话标题、项目名或会话 ID 过滤已归档对话;搜索在浏览器本地完成,不会增加会话日志读取。
 - **取消归档**:把对话从 `archivedSessionIds` 移除,对话会回到原工作区的原位置。
 - **删除**:从工作区与会话注册表中移除,并删除磁盘上的会话目录(不可恢复)。
@@ -35,13 +36,13 @@ DSH 本身已经提供"归档"能力(在左侧会话树右键会话即可归档,
 - 纯 ESM、零运行时依赖(仅用 Node 内置模块),与 `dsh-mcp-manager` 同范式。
 - 客户端:通过 `settings.section` 插槽注册"已归档"标签页,用 `react.createElement` 渲染(无 JSX、无打包)。
 - 宿主端:通过 `ctx.webServer.register` 挂载 `/archived-conversation/api/*` 同源 JSON API。
-- 性能:每轮列表刷新只对每个归档日志执行一次并行 `stat`,复用 workspace 索引与文件元数据;标题缓存命中时跳过 header 读取,并发刷新共享同一次列表重建。
+- 性能:每轮列表刷新只对每个已归档主会话及其发现的子会话日志执行一次并行 `stat`,复用 workspace 索引与文件元数据;标题缓存命中时跳过 header 读取,并发刷新共享同一次列表重建。
 - 全程复用 DSH 既有服务,**不解析会话文件内部格式**:
   - `ctx.workspaceRegistry` —— 归档状态与项目归属的权威来源。
-  - `ctx.sessionPersistence.readFrom` —— 直读会话日志并折叠最后一条 `session/title` 事件(与 DSH 自身的"title"投影单元同逻辑;`sessionQuery.readTitleSnapshots` 对冷会话不可靠)。
+  - `ctx.sessionPersistence.inspect` —— 读取完整逻辑会话日志并折叠最后一条 `session/title` 事件(与 DSH 自身的"title"投影单元同逻辑;`sessionQuery.readTitleSnapshots` 对冷会话不可靠)。
   - `ctx.webServer` —— 挂载管理 API。
 - 安全护栏:变更请求要求同源 Origin、JSON Content-Type 和 loopback Host;正在执行任务的会话会延迟删除。空闲但已挂起的会话会释放后立即删除。
-- 标题读取兼容 DSH `0.1.2-alpha.1`:只走 `cachedSnapshot(header)`,未命中则一次 persistence 读取。不再调用该版本已改签名的 `coldSnapshot(id)`。
+- 仅支持 DSH `0.1.2-alpha.3` 与 `0.1.2-alpha.4`,不再保留更早 alpha 的兼容路径。标题读取先走 `cachedSnapshot(header)`,未命中则调用 `sessionPersistence.inspect(id)`;不依赖 `readFrom` 的事件序号/日志偏移参数,该参数在 alpha.4 中已分型为独立的 `SessionLogOffset`。
 
 ## 安装 / 更新
 
@@ -70,7 +71,7 @@ dsh plugin --profile web update dsh-archived-conversation@latest
 若 pnpm 11 提示 `minimum release age`(版本发布不足 24 小时),改为钉死版本:
 
 ```sh
-dsh plugin --profile web add dsh-archived-conversation@0.2.5
+dsh plugin --profile web add dsh-archived-conversation@0.2.7
 ```
 
 也可从 GitHub Release 安装预构建包(不走 npm):
@@ -84,8 +85,10 @@ dsh plugin --profile web add https://github.com/Li-canghai/dsh-archived-conversa
 1. 在左侧会话树右键任意会话 → **归档**(由 DSH 原生提供)。
 2. 打开 **设置 → 已归档**:按项目查看已归档对话,或在搜索框中输入标题、项目名、会话 ID。
 3. 对搜索结果中的每个对话可:
-   - **取消归档** —— 回到原工作区原位置。
-   - **删除** —— 彻底移除(弹窗二次确认,不可恢复)。
+   - **取消归档** —— 主对话及已归档后代一起回到原工作区原位置。
+   - **删除** —— 按子级优先彻底移除主对话及完整子代理树(弹窗二次确认,不可恢复)。
+
+子代理对话在本页不提供独立操作;直接对子项调用变更 API 会返回 HTTP 409,要求改由主对话统一管理。
 
 ## API
 
@@ -115,9 +118,9 @@ dsh-archived-conversation/
 
 ## 本地开发与部署
 
-本地状态(2026-09-01):开发源码为 `0.2.5`;验证后未来同步到 `$HOME\.dsh\local-plugins\dsh-archived-conversation` 部署副本,web profile 以 `link:` 引用。源码已按本机 DSH 0.1.2-alpha.3 的实际运行契约核对:删除冷会话时发布文档化的 `api-session/removed(sessionId)` 列表事件,不再用不完整对象伪造要求 `Session` 参数的 `session/disposed(Session)`。
+本地状态(2026-09-02):开发源码为 `0.2.7`;部署副本位于 `$HOME\.dsh\local-plugins\dsh-archived-conversation`,web profile 以 `link:` 引用;本次开发改动仍需按受管部署流程同步。宿主支持范围明确收窄为 DSH `0.1.2-alpha.3` 与 `0.1.2-alpha.4`;标题读取使用两版共有的 `inspect(id)` 契约,会话族发现使用 `subagents.listDescendants()`,删除冷会话时发布文档化的 `api-session/removed(sessionId)` 列表事件。
 
-开发目录是 `/home/canghai/Project/DSH/Plugins/dsh-archived-conversation`;DSH 只加载 `~/.dsh/local-plugins/dsh-archived-conversation` 中的自包含副本。宿主端 `inject` 必须保留 `workspaceRegistry`、`sessionPersistence` 和 `webServer`;插件复用 DSH 服务,不直接解析 `session.jsonl.zstd`。
+开发目录是 `C:\Users\cangh\Project\DSH\Plugins\dsh-archived-conversation`;DSH 只加载 `~/.dsh/local-plugins/dsh-archived-conversation` 中的自包含副本。宿主端 `inject` 必须保留 `workspaceRegistry`、`sessionPersistence` 和 `webServer`;插件复用 DSH 服务,不直接解析 `session.jsonl.zstd`。
 
 插件自产生的运行状态统一放在 `~/.dsh/runtime/dsh-archived-conversation`;部署包仍位于 `~/.dsh/local-plugins/dsh-archived-conversation`。升级后首次启动时,若目标文件尚不存在,根目录旧文件 `archived-conversation-titles.json`、`archived-conversation-pending.json` 和 `archived-conversation-ov-pending.json` 会自动移入运行目录。
 

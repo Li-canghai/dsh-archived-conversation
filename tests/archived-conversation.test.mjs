@@ -2,10 +2,10 @@
 //
 // Loads the real plugin module with a mocked ctx against a temp sandbox and
 // verifies the A+B+C+D performance-optimization contract:
-//   1. cold start (no persistent cache): titles resolved without calling the
-//      version-dependent projection-cache coldSnapshot contract
+//   1. cold start (no persistent cache): titles resolved through the
+//      alpha.3/alpha.4 SessionPersistence.inspect contract
 //   2. "restart" (fresh module, persistent cache present): titles served with
-//      ZERO slow-path calls (coldSnapshot/readFrom never invoked)
+//      ZERO slow-path calls (inspect never invoked)
 //   3. log fingerprint change: re-read but served via the projcache fast path
 //      (still zero decompression), persistent cache fp/title refreshed
 //   4. missing-dir session slot: served from the persistent cache ("missing" fp)
@@ -49,6 +49,7 @@ const IDS = {
   A: "session-aaaa0000-0000-0000-0000-00000000000a", // big log, projcache hit
   B: "session-bbbb0000-0000-0000-0000-00000000000b", // big log, projcache miss -> slow path
   C: "session-cccc0000-0000-0000-0000-00000000000c", // dir missing entirely
+  CHILD: "session-child000-0000-0000-0000-000000000001",
 };
 
 function makeSession(id, bytes) {
@@ -61,8 +62,7 @@ makeSession(IDS.B, 2 * 1024 * 1024);
 // C has no dir on disk.
 
 // ---- counters for slow paths ----
-let coldSnapshotCalls = 0;
-let readFromCalls = 0;
+let inspectCalls = 0;
 let registryListCalls = 0;
 let headerCalls = 0;
 
@@ -71,12 +71,6 @@ const projectionCache = {
   cachedSnapshot: (header) => {
     const t = projTitles[header?.id];
     return t ? { values: { title: t } } : undefined;
-  },
-  coldSnapshot: async (meta, events) => {
-    coldSnapshotCalls++;
-    assert.equal(typeof meta, "object", "alpha coldSnapshot requires a SessionHeader");
-    assert.ok(Array.isArray(events), "alpha coldSnapshot requires the complete event list");
-    return undefined;
   },
 };
 
@@ -92,6 +86,7 @@ function makeCtx(opts = {}) {
   const readSessionHeader = opts.readSessionHeader || (async (id) => ({ id, createdAt: 1, cwd: "/proj" }));
   const archivedIds = opts.archivedIds || [IDS.A, IDS.B, IDS.C];
   const wsPath = opts.wsPath || "/proj";
+  const sessionIds = opts.sessionIds || archivedIds;
   const extraGet = opts.get || {};
   const wsState = {
     archivedSessionIds: [...archivedIds],
@@ -102,7 +97,7 @@ function makeCtx(opts = {}) {
     list: () => {
       registryListCalls++;
       return [
-        { id: "w1", record: { id: "w1", title: "proj", path: wsPath }, sessionIds: [...archivedIds] },
+        { id: "w1", record: { id: "w1", title: "proj", path: wsPath }, sessionIds: [...sessionIds] },
       ];
     },
     readSessionHeader: async (id) => {
@@ -126,12 +121,15 @@ function makeCtx(opts = {}) {
     workspaceRegistry: registry,
     sessionPersistence: {
       list: async () => [],
-      readFrom: async (id) => {
-        readFromCalls++;
+      inspect: async (id) => {
+        inspectCalls++;
         if (id === IDS.B) {
           return { events: [{ seq: 5, type: "session/title", data: { title: "项目B标题" } }] };
         }
         return { events: [] };
+      },
+      readFrom: async () => {
+        assert.fail("alpha.3/alpha.4 title lookup must not depend on readFrom offset semantics");
       },
     },
     logger: { warn: () => {}, info: () => {}, error: () => {} },
@@ -202,10 +200,9 @@ test("冷启动:无持久化缓存时解析标题并写盘", async () => {
   assert.equal(cold.groups[0].sessions.length, 3);
   const byId = Object.fromEntries(cold.groups[0].sessions.map((s) => [s.id, s]));
   assert.equal(byId[IDS.A].title, "项目A标题", "A 走 projcache 快路径");
-  assert.equal(byId[IDS.B].title, "项目B标题", "B 走慢路径(readFrom)");
+  assert.equal(byId[IDS.B].title, "项目B标题", "B 走慢路径(inspect)");
   assert.equal(byId[IDS.C].title, "项目C标题", "C 无目录也由 projcache 提供");
-  assert.equal(readFromCalls, 1, "readFrom 只对 B 调用一次");
-  assert.equal(coldSnapshotCalls, 0, "不得调用版本间签名不兼容的 coldSnapshot");
+  assert.equal(inspectCalls, 1, "inspect 只对 B 调用一次");
   assert.equal(registryListCalls, 1, "列表重建只枚举一次 workspace");
 
   // wait for the debounced title-cache write
@@ -222,8 +219,7 @@ test("冷启动:无持久化缓存时解析标题并写盘", async () => {
 
 // ============ Phase 2: simulated restart (fresh module + persistent cache) ============
 test("模拟重启:持久化缓存在场,零慢路径调用", async () => {
-  coldSnapshotCalls = 0;
-  readFromCalls = 0;
+  inspectCalls = 0;
   headerCalls = 0;
   const m2b = await freshModule();
   const ctx2b = makeCtx();
@@ -234,15 +230,13 @@ test("模拟重启:持久化缓存在场,零慢路径调用", async () => {
   const byId = Object.fromEntries(warm.groups[0].sessions.map((s) => [s.id, s]));
   assert.equal(byId[IDS.A].title, "项目A标题");
   assert.equal(byId[IDS.B].title, "项目B标题");
-  assert.equal(readFromCalls, 0, "重启后不触发任何全量解压");
-  assert.equal(coldSnapshotCalls, 0, "重启后不触发 coldSnapshot");
+  assert.equal(inspectCalls, 0, "重启后不触发任何全量解压");
   assert.equal(headerCalls, 0, "持久化标题缓存命中时不读取 session header");
 });
 
 // ============ Phase 3: log fingerprint change ============
 test("日志指纹变化:重读但走 projcache 快路径,零解压,持久化缓存刷新", async () => {
-  coldSnapshotCalls = 0;
-  readFromCalls = 0;
+  inspectCalls = 0;
   // The session gained events: DSH's projection cache now has a fresher title.
   projTitles[IDS.A] = "项目A标题v2";
   const logA = join(sessionsBase, "--proj--", IDS.A, "session.jsonl.zstd");
@@ -251,8 +245,7 @@ test("日志指纹变化:重读但走 projcache 快路径,零解压,持久化缓
   const changed = await callList(m2);
   const byId = Object.fromEntries(changed.groups[0].sessions.map((s) => [s.id, s]));
   assert.equal(byId[IDS.A].title, "项目A标题v2", "拾取到更新后的 projcache 标题");
-  assert.equal(readFromCalls, 0, "指纹变化也不触发全量解压");
-  assert.equal(coldSnapshotCalls, 0, "指纹变化也不触发 coldSnapshot");
+  assert.equal(inspectCalls, 0, "指纹变化也不触发全量解压");
   await new Promise((r) => setTimeout(r, 500));
   const persisted2 = JSON.parse(readFileSync(titlesPath, "utf8"));
   assert.notEqual(persisted2[IDS.A].fp, persistedRaw[IDS.A].fp, "持久化缓存指纹已更新");
@@ -275,6 +268,83 @@ test("并发列表请求共享同一次重建", async () => {
     assert.equal(headerCalls, 3, "三个会话各读取一次 header,不因并发请求翻倍");
   } finally {
     // Restore the shared handler used by the mutation smoke tests below.
+    m2.apply(ctx2);
+  }
+});
+
+test("归档主对话包含只读子代理树,子对话不能单独取消归档或删除", async () => {
+  const m = await freshModule();
+  try {
+    m.apply(makeCtx({
+    archivedIds: [IDS.A],
+    get: {
+      subagents: {
+        async listDescendants(rootId) {
+          assert.equal(rootId, IDS.A);
+          return [{
+            kind: "child",
+            id: IDS.CHILD,
+            parentId: IDS.A,
+            depth: 1,
+            mode: "continuable",
+            label: "核实审批链路",
+            activity: "inactive",
+            hasChildren: false,
+          }];
+        },
+      },
+    },
+    }));
+
+  const listed = await callList(m);
+  const root = listed.groups[0].sessions[0];
+  assert.equal(root.id, IDS.A);
+  assert.deepEqual(root.children, [{
+    id: IDS.CHILD,
+    parentId: IDS.A,
+    depth: 1,
+    title: "核实审批链路",
+    mode: "continuable",
+  }]);
+
+  const unarchiveResult = await call("POST", `/archived-conversation/api/${IDS.CHILD}/unarchive`, JSON_HEADERS);
+  assert.equal(unarchiveResult.status, 409);
+  assert.match(unarchiveResult.body.error, /主对话/);
+  const deleteResult = await call("DELETE", `/archived-conversation/api/${IDS.CHILD}`, JSON_HEADERS);
+  assert.equal(deleteResult.status, 409);
+    assert.match(deleteResult.body.error, /主对话/);
+  } finally {
+    m2.apply(ctx2);
+  }
+});
+
+test("删除归档主对话时按子级优先统一删除完整子代理树", async () => {
+  const rootId = "session-family0000-0000-0000-0000-000000000001";
+  const childId = "session-family0000-0000-0000-0000-000000000002";
+  makeSession(rootId, 64);
+  makeSession(childId, 64);
+  const detached = [];
+  const m = await freshModule();
+  try {
+    m.apply(makeCtx({
+      archivedIds: [rootId],
+      sessionIds: [rootId, childId],
+      detachSession: async (id) => { detached.push(id); },
+      get: {
+        subagents: {
+          async listDescendants(id) {
+            if (id !== rootId) return [];
+            return [{ kind: "child", id: childId, parentId: rootId, depth: 1, mode: "one-shot", label: "子任务", activity: "inactive", hasChildren: false }];
+          },
+        },
+      },
+    }));
+    const result = await callDelete(rootId);
+    assert.equal(result.ok, true);
+    assert.deepEqual(detached, [childId, rootId]);
+    assert.equal(existsSync(join(sessionsBase, "--proj--", childId)), false);
+    assert.equal(existsSync(join(sessionsBase, "--proj--", rootId)), false);
+  } finally {
     m2.apply(ctx2);
   }
 });

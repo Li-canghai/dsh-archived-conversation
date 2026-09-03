@@ -12,6 +12,7 @@ DSH already ships the *archive* capability (right-click a conversation in the le
 ## Features
 
 - **Grouped by project** — reuses DSH's workspace info to group archived conversations under their owning project.
+- **Subagent families** — a main conversation with descendants has an expandable chevron row. Clicking the row reveals the complete subagent tree; child rows are read-only and inherit unarchive/delete from the main conversation.
 - **Instant search** — filters archived conversations by title, project name, or session ID in the browser, without additional session-log reads.
 - **Unarchive** — removes the id from `archivedSessionIds`; the conversation returns to its original position in its workspace.
 - **Delete** — detaches from the workspace, drops from the archive set, and removes the on-disk session directory (irreversible).
@@ -35,13 +36,13 @@ DSH already ships the *archive* capability (right-click a conversation in the le
 - Pure ESM, zero runtime dependencies (Node built-ins only), same shape as `dsh-mcp-manager`.
 - Client: registers the "已归档" tab via the `settings.section` slot, rendered with `react.createElement` (no JSX, no bundler).
 - Host: mounts the `/archived-conversation/api/*` same-origin JSON API via `ctx.webServer.register`.
-- Performance: each refresh performs one parallel `stat` per archived log and reuses workspace/file metadata; title-cache hits skip header reads, while concurrent refreshes share one list rebuild.
+- Performance: each refresh performs one parallel `stat` per archived root and discovered child log and reuses workspace/file metadata; title-cache hits skip header reads, while concurrent refreshes share one list rebuild.
 - Reuses DSH's own services; **never parses the session file format**:
   - `ctx.workspaceRegistry` — the authority on archive state and project membership.
-  - `ctx.sessionPersistence.readFrom` — reads each archived session's log and folds its last `session/title` event (the same logic as DSH's own "title" projection unit; `sessionQuery.readTitleSnapshots` is unreliable for cold persisted sessions).
+  - `ctx.sessionPersistence.inspect` — reads a complete logical session log and folds its last `session/title` event (the same logic as DSH's own "title" projection unit; `sessionQuery.readTitleSnapshots` is unreliable for cold persisted sessions).
   - `ctx.webServer` — mounts the management API.
 - Guard rails: mutation requests require a same-origin Origin, JSON Content-Type, and loopback Host; a running session is queued instead of torn down mid-turn. An idle attached session is released, then deleted.
-- Title lookup is compatible with DSH `0.1.2-alpha.1`: it uses only `cachedSnapshot(header)`, then one persistence read. It does not call `coldSnapshot(id)`, whose signature changed in that release.
+- Requires DSH `0.1.2-alpha.3` or `0.1.2-alpha.4`. Older alpha compatibility paths are intentionally not retained. Title lookup uses `cachedSnapshot(header)` and falls back to `sessionPersistence.inspect(id)`; it does not depend on `readFrom`'s event-sequence/log-offset argument, which became a distinct `SessionLogOffset` in alpha.4.
 
 ## Install / Update
 
@@ -70,7 +71,7 @@ Then restart `dsh --profile web` and reload the page. The plugin self-activates 
 If pnpm 11 reports `minimum release age` (the version is younger than 24h), pin the exact version:
 
 ```sh
-dsh plugin --profile web add dsh-archived-conversation@0.2.5
+dsh plugin --profile web add dsh-archived-conversation@0.2.7
 ```
 
 GitHub Release tarball (prebuilt, no npm):
@@ -84,8 +85,10 @@ dsh plugin --profile web add https://github.com/Li-canghai/dsh-archived-conversa
 1. In the left sidebar, right-click any conversation → **Archive** (provided natively by DSH).
 2. Open **Settings → 已归档**: browse by project or search by title, project name, or session ID.
 3. For each matching conversation you can:
-   - **Unarchive** — return it to its original workspace position.
-   - **Delete** — remove it permanently (confirmation dialog; irreversible).
+   - **Unarchive** — return the main conversation and any archived descendants to their original workspace position.
+   - **Delete** — remove the main conversation and its complete subagent tree, child-first (confirmation dialog; irreversible).
+
+Subagent conversations are never independently actionable in this page. Direct mutation requests for a child return HTTP 409 and instruct the caller to manage the main conversation.
 
 ## API
 
@@ -115,9 +118,9 @@ No build step. After installing into a live web profile, open **Settings → 已
 
 ## Local development and deployment
 
-Local status (2026-09-01): source is `0.2.5`; after verification its future deployment copy is `$HOME\.dsh\local-plugins\dsh-archived-conversation`, referenced through `link:`. The source has been checked against DSH 0.1.2-alpha.3's installed runtime contracts: deleting a cold session emits the documented `api-session/removed(sessionId)` list event instead of forging an incomplete object for `session/disposed(Session)`.
+Local status (2026-09-02): source is `0.2.7`; its deployment copy is `$HOME\.dsh\local-plugins\dsh-archived-conversation`, referenced through `link:`. Development changes still need to be copied through the managed deployment workflow. The supported host range is intentionally limited to DSH `0.1.2-alpha.3` and `0.1.2-alpha.4`; title reads use the shared `inspect(id)` contract, family discovery uses `subagents.listDescendants()`, and cold deletion emits the documented `api-session/removed(sessionId)` event.
 
-The development checkout is `/home/canghai/Project/DSH/Plugins/dsh-archived-conversation`; DSH loads only the self-contained copy at `~/.dsh/local-plugins/dsh-archived-conversation`. The host must keep `workspaceRegistry`, `sessionPersistence`, and `webServer` in `inject`. It uses DSH services instead of decoding `session.jsonl.zstd` directly.
+The development checkout is `C:\Users\cangh\Project\DSH\Plugins\dsh-archived-conversation`; DSH loads only the self-contained copy at `~/.dsh/local-plugins/dsh-archived-conversation`. The host must keep `workspaceRegistry`, `sessionPersistence`, and `webServer` in `inject`. It uses DSH services instead of decoding `session.jsonl.zstd` directly.
 
 Plugin-owned runtime state lives under `~/.dsh/runtime/dsh-archived-conversation`; the deployment package remains under `~/.dsh/local-plugins/dsh-archived-conversation`. On first start after upgrading, root-level `archived-conversation-titles.json`, `archived-conversation-pending.json`, and `archived-conversation-ov-pending.json` files are moved into the runtime directory when no destination file already exists.
 
