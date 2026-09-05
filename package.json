@@ -1,7 +1,7 @@
 {
   "name": "dsh-archived-conversation",
   "description": "Archived-conversation manager for DeepSeek Harness: search, browse, unarchive, and delete archived conversations in Settings → 已归档.",
-  "version": "0.2.7",
+  "version": "0.2.8",
   "type": "module",
   "main": "lib/index.js",
   "scripts": {

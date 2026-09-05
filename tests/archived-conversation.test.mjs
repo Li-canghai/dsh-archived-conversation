@@ -1,19 +1,3 @@
-// Regression tests for dsh-archived-conversation (host half).
-//
-// Loads the real plugin module with a mocked ctx against a temp sandbox and
-// verifies the A+B+C+D performance-optimization contract:
-//   1. cold start (no persistent cache): titles resolved through the
-//      alpha.3/alpha.4 SessionPersistence.inspect contract
-//   2. "restart" (fresh module, persistent cache present): titles served with
-//      ZERO slow-path calls (inspect never invoked)
-//   3. log fingerprint change: re-read but served via the projcache fast path
-//      (still zero decompression), persistent cache fp/title refreshed
-//   4. missing-dir session slot: served from the persistent cache ("missing" fp)
-//   5. unarchive + delete still behave (quick smoke)
-//
-// Run: npm test (node --test tests/)
-// The sandbox lives under the OS temp dir; the real ~/.dsh is never touched
-// (paths are injected through ARCHIVED_CONV_* env vars).
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -88,6 +72,16 @@ function makeCtx(opts = {}) {
   const wsPath = opts.wsPath || "/proj";
   const sessionIds = opts.sessionIds || archivedIds;
   const extraGet = opts.get || {};
+  const sessionController = opts.sessionController === null ? undefined
+    : opts.sessionController || {
+      inspect: async (id) => {
+        inspectCalls++;
+        if (id === IDS.B) {
+          return { meta: { id }, inheritedEventCount: 0, events: [{ seq: 5, type: "session/title", data: { title: "项目B标题" } }] };
+        }
+        return { meta: { id }, inheritedEventCount: 0, events: [] };
+      },
+    };
   const wsState = {
     archivedSessionIds: [...archivedIds],
   };
@@ -116,20 +110,15 @@ function makeCtx(opts = {}) {
       if (Object.hasOwn(extraGet, name)) return extraGet[name];
       if (name === "sessions") return new Map();
       if (name === "sessionProjectionCache") return projectionCache;
+      if (name === "sessionController") return sessionController;
       return undefined;
     },
     workspaceRegistry: registry,
     sessionPersistence: {
       list: async () => [],
-      inspect: async (id) => {
-        inspectCalls++;
-        if (id === IDS.B) {
-          return { events: [{ seq: 5, type: "session/title", data: { title: "项目B标题" } }] };
-        }
-        return { events: [] };
-      },
+      inspect: opts.persistenceInspect,
       readFrom: async () => {
-        assert.fail("alpha.3/alpha.4 title lookup must not depend on readFrom offset semantics");
+        assert.fail("title lookup must not depend on readFrom offset semantics");
       },
     },
     logger: { warn: () => {}, info: () => {}, error: () => {} },
@@ -267,7 +256,50 @@ test("并发列表请求共享同一次重建", async () => {
     assert.deepEqual(first, second);
     assert.equal(headerCalls, 3, "三个会话各读取一次 header,不因并发请求翻倍");
   } finally {
-    // Restore the shared handler used by the mutation smoke tests below.
+    m2.apply(ctx2);
+  }
+});
+
+test("rc.1 回退:无 sessionController 时走 sessionPersistence.inspect", async () => {
+  const sid = "session-rc1fallb00-0000-0000-0000-000000000001";
+  makeSession(sid, 64);
+  inspectCalls = 0;
+  let persistenceInspectCalls = 0;
+  const m = await freshModule();
+  try {
+    m.apply(makeCtx({
+      archivedIds: [sid],
+      sessionController: null,
+      persistenceInspect: async (id) => {
+        persistenceInspectCalls++;
+        return { events: [{ seq: 3, type: "session/title", data: { title: "rc.1标题" } }] };
+      },
+    }));
+    const listed = await callList(m);
+    assert.equal(listed.groups[0].sessions[0].title, "rc.1标题", "标题经 rc.1 持久层 inspect 解析");
+    assert.equal(persistenceInspectCalls, 1);
+    assert.equal(inspectCalls, 0, "无 controller 时不得触碰 sessionController 计数路径");
+  } finally {
+    m2.apply(ctx2);
+  }
+});
+
+test("两条 inspect 通道都缺失时降级为项目名回退,不抛错", async () => {
+  const sid = "session-noinspect0-0000-0000-0000-000000000001";
+  makeSession(sid, 64);
+  const m = await freshModule();
+  try {
+    m.apply(makeCtx({
+      archivedIds: [sid],
+      sessionController: null,
+    }));
+    const listed = await callList(m);
+    assert.equal(
+      listed.groups[0].sessions[0].title,
+      "proj",
+      "无 inspect 通道时回退到工作区路径 basename",
+    );
+  } finally {
     m2.apply(ctx2);
   }
 });

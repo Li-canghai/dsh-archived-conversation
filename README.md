@@ -37,11 +37,11 @@ DSH 本身已经提供"归档"能力(在左侧会话树右键会话即可归档,
 - 性能:每轮列表刷新只对每个已归档主会话及其发现的子会话日志执行一次并行 `stat`,复用 workspace 索引与文件元数据;标题缓存命中时跳过 header 读取,并发刷新共享同一次列表重建。
 - 全程复用 DSH 既有服务,**不解析会话文件内部格式**:
   - `ctx.workspaceRegistry` —— 归档状态与项目归属的权威来源。
-  - `ctx.sessionPersistence.inspect` —— 读取完整逻辑会话日志并折叠最后一条 `session/title` 事件(与 DSH 自身的"title"投影单元同逻辑;`sessionQuery.readTitleSnapshots` 对冷会话不可靠)。
+  - `ctx.sessionController.inspect`(0.2.8+,rc.1 起的权威入口;不可用时回退 `ctx.sessionPersistence.inspect`)—— 读取完整逻辑会话日志并折叠最后一条 `session/title` 事件(与 DSH 自身的"title"投影单元同逻辑;`sessionQuery.readTitleSnapshots` 对冷会话不可靠)。
   - `ctx.webServer` —— 挂载管理 API。
 - 安全护栏:变更请求要求同源 Origin、JSON Content-Type 和 loopback Host;正在执行任务的会话会延迟删除。空闲但已挂起的会话会释放后立即删除。
 
-- **自0.2.7开始**- 仅支持 DSH `0.1.2-alpha.及之后版本`, 不再保留更早 alpha 的兼容路径。标题读取先走 `cachedSnapshot(header)`,未命中则调用 `sessionPersistence.inspect(id)`;不依赖 `readFrom` 的事件序号/日志偏移参数,该参数在 alpha.4 中已分型为独立的 `SessionLogOffset`。
+- **自0.2.8开始**- 仅支持 DSH `0.1.2-rc.1 及之后版本`。标题读取先走 `cachedSnapshot(header)`,未命中则调用 `sessionController.inspect(id)`(回退 `sessionPersistence.inspect(id)`);不依赖 `readFrom` 的事件序号/日志偏移参数,该参数已分型为独立的 `SessionLogOffset`。
 
 ## 安装 / 更新
 
@@ -70,7 +70,7 @@ dsh plugin --profile web update dsh-archived-conversation@latest
 若 pnpm 11 提示 `minimum release age`(版本发布不足 24 小时),改为钉死版本:
 
 ```sh
-dsh plugin --profile web add dsh-archived-conversation@0.2.7
+dsh plugin --profile web add dsh-archived-conversation@0.2.8
 ```
 
 也可从 GitHub Release 安装预构建包(不走 npm):
@@ -108,7 +108,7 @@ dsh-archived-conversation/
   lib/ov-delete.mjs   # 宿主端:OpenViking 会话删除联动(凭证解析 + 待删队列补删)
   lib/runtime-paths.mjs # 宿主端:运行目录与旧文件迁移
   lib/client.js       # 客户端:设置页"已归档"界面
-  README.md / README.zh-CN.md / LICENSE
+  README.md / LICENSE
 ```
 
 ## 验证
