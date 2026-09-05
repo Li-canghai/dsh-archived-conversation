@@ -114,4 +114,3 @@ dsh-archived-conversation/
 ## 验证
 
 本插件无需构建步骤。安装到 live web profile 后,在浏览器打开 **设置 → 已归档** 即可验证;宿主 API 探活:`GET /archived-conversation/api/ping`。
-`。
