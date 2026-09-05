@@ -41,7 +41,7 @@ DSH 本身已经提供"归档"能力(在左侧会话树右键会话即可归档,
   - `ctx.webServer` —— 挂载管理 API。
 - 安全护栏:变更请求要求同源 Origin、JSON Content-Type 和 loopback Host;正在执行任务的会话会延迟删除。空闲但已挂起的会话会释放后立即删除。
 
-- **自0.2.8开始**- 仅支持 DSH `0.1.2-rc.1 及之后版本`。标题读取先走 `cachedSnapshot(header)`,未命中则调用 `sessionController.inspect(id)`(回退 `sessionPersistence.inspect(id)`);不依赖 `readFrom` 的事件序号/日志偏移参数,该参数已分型为独立的 `SessionLogOffset`。
+- **自0.2.8开始**- 仅支持 DSH `0.1.2-rc.1 及之后版本`(已对照 DSH `0.1.3-alpha.1` 源码核验依赖的服务面:`sessionController.inspect` / `sessionPersistence` / `workspaceRegistry` / `webServer.register` 均保留)。标题读取先走 `cachedSnapshot(header)`,未命中则调用 `sessionController.inspect(id)`(回退 `sessionPersistence.inspect(id)`);不依赖 `readFrom` 的事件序号/日志偏移参数,该参数已分型为独立的 `SessionLogOffset`。
 
 ## 安装 / 更新
 
