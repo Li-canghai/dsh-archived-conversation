@@ -226,7 +226,6 @@ test("模拟重启:持久化缓存在场,零慢路径调用", async () => {
 // ============ Phase 3: log fingerprint change ============
 test("日志指纹变化:重读但走 projcache 快路径,零解压,持久化缓存刷新", async () => {
   inspectCalls = 0;
-  // The session gained events: DSH's projection cache now has a fresher title.
   projTitles[IDS.A] = "项目A标题v2";
   const logA = join(sessionsBase, "--proj--", IDS.A, "session.jsonl.zstd");
   const st = statSync(logA);
