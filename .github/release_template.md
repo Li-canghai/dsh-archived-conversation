@@ -30,5 +30,7 @@ Restart `dsh --profile web` after installing or updating.
 
 ## What's New
 
-- **DSH 0.1.2-alpha.3 session delete** — deleting a cold archived session emits the documented `api-session/removed(sessionId)` list event instead of forging an incomplete object for `session/disposed(Session)`.
-- **Runtime state directory** — plugin-owned files (`archived-conversation-titles.json`, `archived-conversation-pending.json`, `archived-conversation-ov-pending.json`) now live under `~/.dsh/runtime/dsh-archived-conversation`; existing root-level files are moved once on upgrade when the destination is empty.
+- **Crash-safe persisted state** — the title cache and pending-delete queue are now written atomically (temp file + rename), so a crash can no longer truncate them into a cold rebuild or a silently dropped delete.
+- **Single-writer delete queues** — deferred local deletes and OpenViking pending deletes are serialized through one in-process promise chain each; overlapping sweeps (20s timer, boot staggering, settings page) can no longer overwrite each other's queue updates.
+- **Memory-safe agent handle registry** — captured `AgentHandle` references use `WeakRef`, so disposed agents no longer pin their session object graph; stale entries are swept automatically and factory wrapping now survives read-only Cordis proxies.
+- **Faster /list** — file metadata is resolved once per session in parallel, concurrent list requests share a single rebuild, and session headers are read only on title-cache misses.
