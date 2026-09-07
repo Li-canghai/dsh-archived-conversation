@@ -30,9 +30,9 @@ const JSON_HEADERS = {
 };
 
 const IDS = {
-  A: "session-aaaa0000-0000-0000-0000-00000000000a", // big log, projcache hit
-  B: "session-bbbb0000-0000-0000-0000-00000000000b", // big log, projcache miss -> slow path
-  C: "session-cccc0000-0000-0000-0000-00000000000c", // dir missing entirely
+  A: "session-aaaa0000-0000-0000-0000-00000000000a",
+  B: "session-bbbb0000-0000-0000-0000-00000000000b",
+  C: "session-cccc0000-0000-0000-0000-00000000000c",
   CHILD: "session-child000-0000-0000-0000-000000000001",
 };
 
@@ -43,9 +43,7 @@ function makeSession(id, bytes) {
 }
 makeSession(IDS.A, 1024 * 1024);
 makeSession(IDS.B, 2 * 1024 * 1024);
-// C has no dir on disk.
 
-// ---- counters for slow paths ----
 let inspectCalls = 0;
 let registryListCalls = 0;
 let headerCalls = 0;
@@ -60,7 +58,6 @@ const projectionCache = {
 
 let capturedHandler = null;
 const effects = [];
-// cross-phase state (stashed module-level, not globalThis)
 let persistedRaw = null;
 let ctx2 = null;
 let m2 = null;
@@ -141,8 +138,6 @@ function makeCtx(opts = {}) {
   };
 }
 
-// Fresh module instance per "restart": a unique query string forces Node to
-// re-evaluate the module so the in-memory caches start empty.
 const pluginUrl = new URL("../lib/index.js", import.meta.url);
 async function freshModule() {
   return import(pluginUrl.href + "?v=" + Math.random());
@@ -155,7 +150,8 @@ async function call(method, url, headers = {}) {
     writeHead(s) { status = s; },
     end: (b) => { body = JSON.parse(b); },
   };
-  await capturedHandler({ method, url, headers }, res);
+  const finalHeaders = { host: GUI_HOST, ...headers };
+  await capturedHandler({ method, url, headers: finalHeaders }, res);
   return { status, body };
 }
 
@@ -179,7 +175,6 @@ after(() => {
   rmSync(sandbox, { recursive: true, force: true });
 });
 
-// ============ Phase 1: cold start (no persistent cache) ============
 test("冷启动:无持久化缓存时解析标题并写盘", async () => {
   registryListCalls = 0;
   const m1 = await freshModule();
@@ -194,7 +189,6 @@ test("冷启动:无持久化缓存时解析标题并写盘", async () => {
   assert.equal(inspectCalls, 1, "inspect 只对 B 调用一次");
   assert.equal(registryListCalls, 1, "列表重建只枚举一次 workspace");
 
-  // wait for the debounced title-cache write
   await new Promise((r) => setTimeout(r, 500));
   assert.ok(existsSync(titlesPath), "持久化标题缓存已写盘");
   const persistedRaw0 = JSON.parse(readFileSync(titlesPath, "utf8"));
@@ -202,11 +196,9 @@ test("冷启动:无持久化缓存时解析标题并写盘", async () => {
     assert.ok(persistedRaw0[id] && typeof persistedRaw0[id].fp === "string", `${id} 已入持久化缓存`);
   }
   assert.equal(persistedRaw0[IDS.C].fp, "missing", "无目录会话指纹为 missing");
-  // stash for later phases
   persistedRaw = persistedRaw0;
 });
 
-// ============ Phase 2: simulated restart (fresh module + persistent cache) ============
 test("模拟重启:持久化缓存在场,零慢路径调用", async () => {
   inspectCalls = 0;
   headerCalls = 0;
@@ -223,13 +215,12 @@ test("模拟重启:持久化缓存在场,零慢路径调用", async () => {
   assert.equal(headerCalls, 0, "持久化标题缓存命中时不读取 session header");
 });
 
-// ============ Phase 3: log fingerprint change ============
 test("日志指纹变化:重读但走 projcache 快路径,零解压,持久化缓存刷新", async () => {
   inspectCalls = 0;
   projTitles[IDS.A] = "项目A标题v2";
   const logA = join(sessionsBase, "--proj--", IDS.A, "session.jsonl.zstd");
   const st = statSync(logA);
-  utimesSync(logA, new Date(), new Date(st.mtimeMs + 2000)); // change mtime only
+  utimesSync(logA, new Date(), new Date(st.mtimeMs + 2000));
   const changed = await callList(m2);
   const byId = Object.fromEntries(changed.groups[0].sessions.map((s) => [s.id, s]));
   assert.equal(byId[IDS.A].title, "项目A标题v2", "拾取到更新后的 projcache 标题");
@@ -380,14 +371,12 @@ test("删除归档主对话时按子级优先统一删除完整子代理树", as
   }
 });
 
-// ============ Phase 4: unarchive smoke ============
 test("取消归档冒烟", async () => {
   const body = await callUnarchive(IDS.C);
   assert.equal(body.ok, true);
   assert.equal(ctx2.workspaceRegistry.requireState().archivedSessionIds.length, 2);
 });
 
-// ============ Phase 5: delete (cold session, dir exists) ============
 test("删除冒烟", async () => {
   const body = await callDelete(IDS.B);
   assert.equal(body.ok, true);
@@ -434,6 +423,13 @@ test("POST 非 loopback Host 返回 403", async () => {
     host: "attacker.com:3080",
     origin: "http://attacker.com:3080",
     "content-type": "application/json",
+  });
+  assert.equal(r.status, 403);
+});
+
+test("GET 非 loopback Host 返回 403(DNS rebinding 防护)", async () => {
+  const r = await call("GET", "/archived-conversation/api/list", {
+    host: "attacker.com:3080",
   });
   assert.equal(r.status, 403);
 });
@@ -706,4 +702,18 @@ test("捕获 AgentHandle.dispose 后可直接删除仍挂起的空闲会话", as
   assert.equal(body.ok, true);
   assert.equal(sessions.has(sid), false);
   assert.ok(!existsSync(dir), "释放后应删除会话目录");
+});
+
+test("rm 失败后:会话已出归档但目录残留时,processPendingDeletes 持续清扫直至目录消失", async () => {
+  const sid = "session-residual000-0000-0000-0000-000000000001";
+  const dir = join(sessionsBase, "--proj--", sid);
+  makeSession(sid, 16);
+  writeFileSync(pendingPath, JSON.stringify([sid], null, 2));
+  const m = await freshModule();
+  m.apply(makeCtx({ archivedIds: [IDS.A, IDS.B] }));
+  assert.ok(existsSync(dir), "前置:残留目录存在");
+  await m.processPendingDeletes(makeCtx({ archivedIds: [IDS.A, IDS.B] }), true);
+  assert.ok(!existsSync(dir), "残留目录应被清扫");
+  const queued = JSON.parse(readFileSync(pendingPath, "utf8"));
+  assert.ok(!queued.includes(sid), "队列条目应在目录清除后移除");
 });

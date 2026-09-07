@@ -1,6 +1,3 @@
-// Unit tests for lib/ov-delete.mjs: credential resolution, DELETE semantics
-// (200 / 404 / retry-queue), pending queue replay, and header fields.
-// All IO is injected: fetchImpl / readFile / store — nothing touches the disk.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -22,7 +19,7 @@ function memoryStore(initial = []) {
   };
 }
 
-const noConf = () => null; // simulate missing ovcli.conf
+const noConf = () => null;
 
 function fakeFetch(responses = []) {
   const calls = [];
@@ -184,4 +181,34 @@ test("flush: empty queue -> 0 without fetch", async () => {
   const flushed = await flushPendingOvDeletes({ env: envWithCreds(), fetchImpl, store });
   assert.equal(flushed, 0);
   assert.equal(fetchImpl.calls.length, 0);
+});
+
+test("push 与 flush 并发: 单写者队列保证新 push 不丢失 (review M3)", async () => {
+  const initial = [{ sessionId: "dsh-old", attempts: 0 }];
+  let entries = [...initial];
+  let loadCount = 0;
+  const store = {
+    load: async () => {
+      loadCount++;
+      return [...entries];
+    },
+    save: async (next) => {
+      entries = [...next];
+    },
+    entries: () => entries,
+  };
+  let releaseFetch;
+  const gate = new Promise((resolve) => { releaseFetch = resolve; });
+  const fetchImpl = async (url) => {
+    if (url.endsWith("/dsh-old")) await gate;
+    return { ok: true, status: 200 };
+  };
+  const flushPromise = flushPendingOvDeletes({ env: envWithCreds(), fetchImpl, store });
+  while (loadCount === 0) await new Promise((r) => setTimeout(r, 1));
+  const pushPromise = pushOvPendingDelete({ sessionId: "dsh-new", store });
+  releaseFetch();
+  await Promise.all([flushPromise, pushPromise]);
+  const ids = store.entries().map((e) => e.sessionId);
+  assert.ok(ids.includes("dsh-old") === false, "flush 成功的条目应移除");
+  assert.ok(ids.includes("dsh-new"), `并发 push 的条目不得丢失, 实际: ${JSON.stringify(ids)}`);
 });
