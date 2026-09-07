@@ -17,7 +17,7 @@ dsh plugin --profile web update dsh-archived-conversation@latest
 If pnpm 11 reports `minimum release age`, pin the exact version:
 
 ```sh
-dsh plugin --profile web add dsh-archived-conversation@0.2.5
+dsh plugin --profile web add dsh-archived-conversation@0.2.9
 ```
 
 GitHub Release tarball (no npm):
