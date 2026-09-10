@@ -56,8 +56,9 @@ const projectionCache = {
   },
 };
 
-let capturedHandler = null;
+const apiRoutes = new Map();
 const effects = [];
+
 let persistedRaw = null;
 let ctx2 = null;
 let m2 = null;
@@ -69,6 +70,7 @@ function makeCtx(opts = {}) {
   const wsPath = opts.wsPath || "/proj";
   const sessionIds = opts.sessionIds || archivedIds;
   const extraGet = opts.get || {};
+
   const sessionController = opts.sessionController === null ? undefined
     : opts.sessionController || {
       inspect: async (id) => {
@@ -111,18 +113,7 @@ function makeCtx(opts = {}) {
       return undefined;
     },
     workspaceRegistry: registry,
-    sessionPersistence: {
-      list: async () => [],
-      inspect: opts.persistenceInspect,
-      readFrom: async () => {
-        assert.fail("title lookup must not depend on readFrom offset semantics");
-      },
-    },
     logger: { warn: () => {}, info: () => {}, error: () => {} },
-    webServer: {
-      port: 3080,
-      register: (def) => { capturedHandler = def.handler; return {}; },
-    },
     emit: (event, ...args) => { emitted.push([event, ...args]); },
     emitted,
     effect: (fn) => {
@@ -130,6 +121,18 @@ function makeCtx(opts = {}) {
     },
     inject: (names, callback) => {
       if (!Array.isArray(names) || typeof callback !== "function") return;
+
+      if (names.includes("connection")) {
+        callback({
+          connection: {
+            registerFetchRoute: (owner, route) => {
+              apiRoutes.set(route.path, route);
+              owner.effect(() => () => apiRoutes.delete(route.path));
+            },
+          },
+        });
+        return;
+      }
       if (!names.includes("agents")) return;
       const agents = extraGet.agents;
       if (agents === undefined) return;
@@ -143,30 +146,32 @@ async function freshModule() {
   return import(pluginUrl.href + "?v=" + Math.random());
 }
 
-async function call(method, url, headers = {}) {
-  let status = 0;
-  let body;
-  const res = {
-    writeHead(s) { status = s; },
-    end: (b) => { body = JSON.parse(b); },
-  };
-  const finalHeaders = { host: GUI_HOST, ...headers };
-  await capturedHandler({ method, url, headers: finalHeaders }, res);
-  return { status, body };
+async function call(method, url, headers = {}, body) {
+  const route = apiRoutes.get(new URL(url, "http://localhost").pathname);
+  assert.ok(route, `route not registered: ${url}`);
+
+  const request = new Request(`http://localhost${url}`, {
+    method,
+    headers: { host: GUI_HOST, ...headers },
+    ...(body === undefined ? {} : { body }),
+  });
+  const response = await route.fetch(request);
+  const text = await response.text();
+  return { status: response.status, body: text === "" ? {} : JSON.parse(text) };
 }
 
 async function callList(mod) {
-  const r = await call("GET", "/archived-conversation/api/list");
+  const r = await call("GET", "/api/archived-conversation/list");
   return r.body;
 }
 
 async function callDelete(id) {
-  const r = await call("DELETE", `/archived-conversation/api/${id}`, JSON_HEADERS);
+  const r = await call("POST", "/api/archived-conversation/delete", JSON_HEADERS, JSON.stringify({ id }));
   return r.body;
 }
 
 async function callUnarchive(id) {
-  const r = await call("POST", `/archived-conversation/api/${id}/unarchive`, JSON_HEADERS);
+  const r = await call("POST", "/api/archived-conversation/unarchive", JSON_HEADERS, JSON.stringify({ id }));
   return r.body;
 }
 
@@ -196,6 +201,7 @@ test("冷启动:无持久化缓存时解析标题并写盘", async () => {
     assert.ok(persistedRaw0[id] && typeof persistedRaw0[id].fp === "string", `${id} 已入持久化缓存`);
   }
   assert.equal(persistedRaw0[IDS.C].fp, "missing", "无目录会话指纹为 missing");
+
   persistedRaw = persistedRaw0;
 });
 
@@ -217,6 +223,7 @@ test("模拟重启:持久化缓存在场,零慢路径调用", async () => {
 
 test("日志指纹变化:重读但走 projcache 快路径,零解压,持久化缓存刷新", async () => {
   inspectCalls = 0;
+
   projTitles[IDS.A] = "项目A标题v2";
   const logA = join(sessionsBase, "--proj--", IDS.A, "session.jsonl.zstd");
   const st = statSync(logA);
@@ -246,35 +253,12 @@ test("并发列表请求共享同一次重建", async () => {
     assert.deepEqual(first, second);
     assert.equal(headerCalls, 3, "三个会话各读取一次 header,不因并发请求翻倍");
   } finally {
+
     m2.apply(ctx2);
   }
 });
 
-test("rc.1 回退:无 sessionController 时走 sessionPersistence.inspect", async () => {
-  const sid = "session-rc1fallb00-0000-0000-0000-000000000001";
-  makeSession(sid, 64);
-  inspectCalls = 0;
-  let persistenceInspectCalls = 0;
-  const m = await freshModule();
-  try {
-    m.apply(makeCtx({
-      archivedIds: [sid],
-      sessionController: null,
-      persistenceInspect: async (id) => {
-        persistenceInspectCalls++;
-        return { events: [{ seq: 3, type: "session/title", data: { title: "rc.1标题" } }] };
-      },
-    }));
-    const listed = await callList(m);
-    assert.equal(listed.groups[0].sessions[0].title, "rc.1标题", "标题经 rc.1 持久层 inspect 解析");
-    assert.equal(persistenceInspectCalls, 1);
-    assert.equal(inspectCalls, 0, "无 controller 时不得触碰 sessionController 计数路径");
-  } finally {
-    m2.apply(ctx2);
-  }
-});
-
-test("两条 inspect 通道都缺失时降级为项目名回退,不抛错", async () => {
+test("sessionController 缺失时降级为项目名回退,不抛错", async () => {
   const sid = "session-noinspect0-0000-0000-0000-000000000001";
   makeSession(sid, 64);
   const m = await freshModule();
@@ -329,10 +313,10 @@ test("归档主对话包含只读子代理树,子对话不能单独取消归档�
     mode: "continuable",
   }]);
 
-  const unarchiveResult = await call("POST", `/archived-conversation/api/${IDS.CHILD}/unarchive`, JSON_HEADERS);
+  const unarchiveResult = await call("POST", "/api/archived-conversation/unarchive", JSON_HEADERS, JSON.stringify({ id: IDS.CHILD }));
   assert.equal(unarchiveResult.status, 409);
   assert.match(unarchiveResult.body.error, /主对话/);
-  const deleteResult = await call("DELETE", `/archived-conversation/api/${IDS.CHILD}`, JSON_HEADERS);
+  const deleteResult = await call("POST", "/api/archived-conversation/delete", JSON_HEADERS, JSON.stringify({ id: IDS.CHILD }));
   assert.equal(deleteResult.status, 409);
     assert.match(deleteResult.body.error, /主对话/);
   } finally {
@@ -395,56 +379,46 @@ test("删除冒烟", async () => {
 });
 
 test("GET /ping 无 Origin 仍为 200", async () => {
-  const r = await call("GET", "/archived-conversation/api/ping");
+  const r = await call("GET", "/api/archived-conversation/ping");
   assert.equal(r.status, 200);
   assert.equal(r.body.ok, true);
   assert.equal(typeof r.body.version, "string");
 });
 
-test("POST 无 Origin 返回 403", async () => {
-  const r = await call("POST", `/archived-conversation/api/${IDS.A}/unarchive`, {
+test("POST 无 Origin 仍通过栅栏(Desktop 管道语义),未归档 id 返回 404", async () => {
+  const r = await call("POST", "/api/archived-conversation/unarchive", {
     host: GUI_HOST,
     "content-type": "application/json",
-  });
-  assert.equal(r.status, 403);
+  }, JSON.stringify({ id: IDS.C }));
+  assert.equal(r.status, 404);
+  assert.equal(r.body.ok, false);
 });
 
 test("POST 恶意 Origin 返回 403", async () => {
-  const r = await call("POST", `/archived-conversation/api/${IDS.A}/unarchive`, {
+  const r = await call("POST", "/api/archived-conversation/unarchive", {
     host: GUI_HOST,
     origin: "http://evil.example",
     "content-type": "application/json",
-  });
-  assert.equal(r.status, 403);
-});
-
-test("POST 非 loopback Host 返回 403", async () => {
-  const r = await call("POST", `/archived-conversation/api/${IDS.A}/unarchive`, {
-    host: "attacker.com:3080",
-    origin: "http://attacker.com:3080",
-    "content-type": "application/json",
-  });
-  assert.equal(r.status, 403);
-});
-
-test("GET 非 loopback Host 返回 403(DNS rebinding 防护)", async () => {
-  const r = await call("GET", "/archived-conversation/api/list", {
-    host: "attacker.com:3080",
-  });
+  }, JSON.stringify({ id: IDS.A }));
   assert.equal(r.status, 403);
 });
 
 test("POST 非 JSON Content-Type 返回 415", async () => {
-  const r = await call("POST", `/archived-conversation/api/${IDS.A}/unarchive`, {
+  const r = await call("POST", "/api/archived-conversation/unarchive", {
     host: GUI_HOST,
     origin: GUI_ORIGIN,
     "content-type": "application/x-www-form-urlencoded",
-  });
+  }, "id=x");
   assert.equal(r.status, 415);
 });
 
+test("POST 非法 id 返回 400", async () => {
+  const r = await call("POST", "/api/archived-conversation/delete", JSON_HEADERS, JSON.stringify({ id: "../evil" }));
+  assert.equal(r.status, 400);
+});
+
 test("取消归档不在归档集合中的会话返回 404", async () => {
-  const r = await call("POST", `/archived-conversation/api/${IDS.C}/unarchive`, JSON_HEADERS);
+  const r = await call("POST", "/api/archived-conversation/unarchive", JSON_HEADERS, JSON.stringify({ id: IDS.C }));
   assert.equal(r.status, 404);
   assert.equal(r.body.ok, false);
 });
@@ -459,7 +433,7 @@ test("detach 失败时不改归档状态、不删目录,并排队", async () => 
   m.apply(ctx);
   const dir = join(sessionsBase, "--proj--", IDS.A);
   assert.ok(existsSync(dir));
-  const r = await call("DELETE", `/archived-conversation/api/${IDS.A}`, JSON_HEADERS);
+  const r = await call("POST", "/api/archived-conversation/delete", JSON_HEADERS, JSON.stringify({ id: IDS.A }));
   assert.equal(r.status, 200);
   assert.equal(r.body.ok, false);
   assert.equal(r.body.queued, true);
@@ -467,18 +441,18 @@ test("detach 失败时不改归档状态、不删目录,并排队", async () => 
   assert.ok(existsSync(dir), "detach 失败不得删除会话目录");
 });
 
-test("同源守卫: Origin 必须匹配 Host,且仅接受 loopback", async () => {
+test("同源守卫: Origin 必须匹配 Host;跨源判定由 isCrossOriginMutation 承担", async () => {
   const m = await freshModule();
   assert.equal(m.isSameOriginMutation({ headers: { host: GUI_HOST, origin: GUI_ORIGIN } }), true);
   assert.equal(m.isSameOriginMutation({ headers: { host: GUI_HOST } }), false);
   assert.equal(m.isSameOriginMutation({
     headers: { host: GUI_HOST, origin: "http://evil.example" },
   }), false);
-  assert.equal(m.isLoopbackHostname("127.0.0.1"), true);
-  assert.equal(m.isLoopbackHostname("192.168.1.1"), false);
   assert.equal(m.isJsonContentType({ headers: { "content-type": "application/json; charset=utf-8" } }), true);
-  assert.equal(m.resolveGuiOrigin({ headers: { host: GUI_HOST } }, 3080), GUI_ORIGIN);
-  assert.equal(m.resolveGuiOrigin({ headers: { host: "192.168.1.8:3080" } }, 3080), null);
+
+  assert.equal(m.isCrossOriginMutation({ headers: { host: GUI_HOST } }), false);
+  assert.equal(m.isCrossOriginMutation({ headers: { host: GUI_HOST, origin: GUI_ORIGIN } }), false);
+  assert.equal(m.isCrossOriginMutation({ headers: { host: GUI_HOST, origin: "http://evil.example" } }), true);
 });
 
 function makeLedgerSpy(targetId) {
@@ -657,7 +631,7 @@ test("attached 会话在只有 scope.dispose 时仍排队", async () => {
         agents: { get: (id) => (id === sid ? agent : undefined) },
       },
     }));
-    const r = await call("DELETE", `/archived-conversation/api/${sid}`, JSON_HEADERS);
+    const r = await call("POST", "/api/archived-conversation/delete", JSON_HEADERS, JSON.stringify({ id: sid }));
     assert.equal(r.status, 200);
     assert.equal(r.body.ok, false);
     assert.equal(r.body.queued, true);
@@ -705,9 +679,11 @@ test("捕获 AgentHandle.dispose 后可直接删除仍挂起的空闲会话", as
 });
 
 test("rm 失败后:会话已出归档但目录残留时,processPendingDeletes 持续清扫直至目录消失", async () => {
+
   const sid = "session-residual000-0000-0000-0000-000000000001";
   const dir = join(sessionsBase, "--proj--", sid);
   makeSession(sid, 16);
+
   writeFileSync(pendingPath, JSON.stringify([sid], null, 2));
   const m = await freshModule();
   m.apply(makeCtx({ archivedIds: [IDS.A, IDS.B] }));
