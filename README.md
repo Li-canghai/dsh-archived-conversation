@@ -32,7 +32,6 @@ DSH 本身已经提供"归档"能力(在左侧会话树右键会话即可归档,
 
 ## 实现要点
 
-- 纯 ESM、零运行时依赖(仅用 Node 内置模块),与 `dsh-mcp-manager` 同范式。
 - 客户端:通过 `settings.section` 插槽注册"已归档"标签页,用 `react.createElement` 渲染(无 JSX、无打包);列表数据未变化时跳过重渲染,20 秒轮询与焦点刷新不产生多余 DOM 更新。
 - 宿主端:顶层注入仅 `workspaceRegistry`;API 通过 scoped `ctx.inject(["connection"])` 在共享 `/api` 通道注册精确 Fetch 路由(`/api/archived-conversation/*`)。web profile 由 webserver 桥承载(信任围栏与浏览器鉴权在路由之前施加),Desktop 由 Electron 主进程经字节管道送入同一 handler,两端共用一套代码,不再依赖 `webServer` 服务。
 - 性能:
