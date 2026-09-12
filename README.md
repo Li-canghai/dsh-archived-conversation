@@ -42,9 +42,12 @@ DSH 本身已经提供"归档"能力(在左侧会话树右键会话即可归档,
 - 全程复用 DSH 既有服务,**不解析会话文件内部格式**:
   - `ctx.workspaceRegistry` —— 归档状态与项目归属的权威来源;归档状态改写排入其自身操作队列,不与 DSH 原生归档操作交错。
   - `ctx.sessionController.inspect` —— 读取完整逻辑会话日志并折叠最后一条 `session/title` 事件(与 DSH 自身的"title"投影单元同逻辑;`sessionQuery.readTitleSnapshots` 对冷会话不可靠)。
-- 可靠性(0.2.9+):
+- 可靠性(0.2.9+,0.2.11 增强):
   - 标题缓存与两个待删队列均为原子写(临时文件 + rename,权限 0600,与 DSH 自身存储一致),崩溃不会截断文件;待删队列截断意味着静默丢失排队删除。
   - 延迟删除清扫与 OpenViking 队列操作均走进程内单写者 promise 链,并发触发(20 秒定时、启动清扫、设置页快扫、手动删除入队)不会互相覆盖。
+  - 取消归档会同步撤销该会话族排队中的删除;残留清扫仅清"不在归档集合且既不活跃也未持有工作区槽位"的会话目录,活会话不受影响(0.2.11)。
+  - 删除因文件占用(如 Windows 锁)重试成功后,清扫会补齐全部收尾:OpenViking 联动、移除事件、rewind/review 快照与插件缓存清理(0.2.11)。
+  - 待删队列加载时按会话 ID 形状校验条目,损坏的队列文件无法把任意字符串引入递归删除(0.2.11)。
   - AgentHandle 注册表改用 `WeakRef`,不会把已终结会话的整个对象图钉在内存里。
 - 安全护栏:变更请求拒绝跨源 Origin(浏览器 fetch 总是携带 Origin;Desktop 管道的同应用请求不带 Origin,予以放行)并要求 JSON Content-Type;loopback 信任围栏由 webserver 桥 / Desktop 管道在上游施加。正在执行任务的会话立即返回排队回执,空闲但已挂起的会话在释放后立即删除。
 
@@ -77,7 +80,7 @@ dsh plugin --profile web update dsh-archived-conversation@latest
 若 pnpm 11 提示 `minimum release age`(版本发布不足 24 小时),改为钉死版本:
 
 ```sh
-dsh plugin --profile web add dsh-archived-conversation@0.2.10
+dsh plugin --profile web add dsh-archived-conversation@0.2.11
 ```
 
 也可从 GitHub Release 安装预构建包(不走 npm):

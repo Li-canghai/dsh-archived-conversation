@@ -58,7 +58,6 @@ const projectionCache = {
 
 const apiRoutes = new Map();
 const effects = [];
-
 let persistedRaw = null;
 let ctx2 = null;
 let m2 = null;
@@ -70,7 +69,6 @@ function makeCtx(opts = {}) {
   const wsPath = opts.wsPath || "/proj";
   const sessionIds = opts.sessionIds || archivedIds;
   const extraGet = opts.get || {};
-
   const sessionController = opts.sessionController === null ? undefined
     : opts.sessionController || {
       inspect: async (id) => {
@@ -121,7 +119,6 @@ function makeCtx(opts = {}) {
     },
     inject: (names, callback) => {
       if (!Array.isArray(names) || typeof callback !== "function") return;
-
       if (names.includes("connection")) {
         callback({
           connection: {
@@ -149,7 +146,6 @@ async function freshModule() {
 async function call(method, url, headers = {}, body) {
   const route = apiRoutes.get(new URL(url, "http://localhost").pathname);
   assert.ok(route, `route not registered: ${url}`);
-
   const request = new Request(`http://localhost${url}`, {
     method,
     headers: { host: GUI_HOST, ...headers },
@@ -201,7 +197,6 @@ test("冷启动:无持久化缓存时解析标题并写盘", async () => {
     assert.ok(persistedRaw0[id] && typeof persistedRaw0[id].fp === "string", `${id} 已入持久化缓存`);
   }
   assert.equal(persistedRaw0[IDS.C].fp, "missing", "无目录会话指纹为 missing");
-
   persistedRaw = persistedRaw0;
 });
 
@@ -223,7 +218,6 @@ test("模拟重启:持久化缓存在场,零慢路径调用", async () => {
 
 test("日志指纹变化:重读但走 projcache 快路径,零解压,持久化缓存刷新", async () => {
   inspectCalls = 0;
-
   projTitles[IDS.A] = "项目A标题v2";
   const logA = join(sessionsBase, "--proj--", IDS.A, "session.jsonl.zstd");
   const st = statSync(logA);
@@ -253,7 +247,6 @@ test("并发列表请求共享同一次重建", async () => {
     assert.deepEqual(first, second);
     assert.equal(headerCalls, 3, "三个会话各读取一次 header,不因并发请求翻倍");
   } finally {
-
     m2.apply(ctx2);
   }
 });
@@ -449,7 +442,6 @@ test("同源守卫: Origin 必须匹配 Host;跨源判定由 isCrossOriginMutati
     headers: { host: GUI_HOST, origin: "http://evil.example" },
   }), false);
   assert.equal(m.isJsonContentType({ headers: { "content-type": "application/json; charset=utf-8" } }), true);
-
   assert.equal(m.isCrossOriginMutation({ headers: { host: GUI_HOST } }), false);
   assert.equal(m.isCrossOriginMutation({ headers: { host: GUI_HOST, origin: GUI_ORIGIN } }), false);
   assert.equal(m.isCrossOriginMutation({ headers: { host: GUI_HOST, origin: "http://evil.example" } }), true);
@@ -679,11 +671,9 @@ test("捕获 AgentHandle.dispose 后可直接删除仍挂起的空闲会话", as
 });
 
 test("rm 失败后:会话已出归档但目录残留时,processPendingDeletes 持续清扫直至目录消失", async () => {
-
   const sid = "session-residual000-0000-0000-0000-000000000001";
   const dir = join(sessionsBase, "--proj--", sid);
   makeSession(sid, 16);
-
   writeFileSync(pendingPath, JSON.stringify([sid], null, 2));
   const m = await freshModule();
   m.apply(makeCtx({ archivedIds: [IDS.A, IDS.B] }));
@@ -692,4 +682,73 @@ test("rm 失败后:会话已出归档但目录残留时,processPendingDeletes �
   assert.ok(!existsSync(dir), "残留目录应被清扫");
   const queued = JSON.parse(readFileSync(pendingPath, "utf8"));
   assert.ok(!queued.includes(sid), "队列条目应在目录清除后移除");
+});
+
+test("取消归档同时撤销排队中的删除,活会话目录不得被清扫", async () => {
+  const sid = "session-unarchcan000-0000-0000-0000-000000000001";
+  const dir = join(sessionsBase, "--proj--", sid);
+  makeSession(sid, 16);
+  writeFileSync(pendingPath, JSON.stringify([sid], null, 2));
+  const m = await freshModule();
+  m.apply(makeCtx({ archivedIds: [sid] }));
+  const body = await callUnarchive(sid);
+  assert.equal(body.ok, true);
+  assert.deepEqual(JSON.parse(readFileSync(pendingPath, "utf8")), [], "排队删除应被撤销");
+  assert.ok(existsSync(dir), "取消归档后活会话目录必须保留");
+});
+
+test("清扫护栏:会话仍在工作区(排队后取消归档)时不得 rm 其目录", async () => {
+  const sid = "session-sweepfence00-0000-0000-0000-000000000001";
+  const dir = join(sessionsBase, "--proj--", sid);
+  makeSession(sid, 16);
+  writeFileSync(pendingPath, JSON.stringify([sid], null, 2));
+  const m = await freshModule();
+  m.apply(makeCtx({ archivedIds: [], sessionIds: [sid] }));
+  await m.processPendingDeletes(makeCtx({ archivedIds: [], sessionIds: [sid] }), true);
+  assert.ok(existsSync(dir), "仍持有工作区槽位的会话目录不得被清扫");
+  assert.deepEqual(JSON.parse(readFileSync(pendingPath, "utf8")), [], "被取消的队列条目应移除");
+});
+
+test("清扫护栏:会话重新激活(active)时不得 rm 其目录", async () => {
+  const sid = "session-sweepfence00-0000-0000-0000-000000000002";
+  const dir = join(sessionsBase, "--proj--", sid);
+  makeSession(sid, 16);
+  writeFileSync(pendingPath, JSON.stringify([sid], null, 2));
+  const m = await freshModule();
+  m.apply(makeCtx({
+    archivedIds: [],
+    sessionIds: [],
+    get: { sessions: { get: (id) => (id === sid ? { id: sid } : undefined) } },
+  }));
+  await m.processPendingDeletes(makeCtx({
+    archivedIds: [],
+    sessionIds: [],
+    get: { sessions: { get: (id) => (id === sid ? { id: sid } : undefined) } },
+  }), true);
+  assert.ok(existsSync(dir), "active 会话目录不得被清扫");
+  assert.deepEqual(JSON.parse(readFileSync(pendingPath, "utf8")), [], "被取消的队列条目应移除");
+});
+
+test("残留清扫完成后补齐删除收尾:removed 事件与 sidecar 清理", async () => {
+  const sid = "session-residfin000-0000-0000-0000-000000000001";
+  const dir = join(sessionsBase, "--proj--", sid);
+  makeSession(sid, 16);
+  writeFileSync(pendingPath, JSON.stringify([sid], null, 2));
+  const forgotten = [];
+  const m = await freshModule();
+  const ctxArgs = {
+    archivedIds: [],
+    sessionIds: [],
+    get: { turnReview: { forget: (id) => forgotten.push(id) } },
+  };
+  m.apply(makeCtx(ctxArgs));
+  const sweepCtx = makeCtx(ctxArgs);
+  await m.processPendingDeletes(sweepCtx, true);
+  assert.ok(!existsSync(dir), "残留目录应被清扫");
+  assert.deepEqual(forgotten, [sid], "残留清扫应补齐 turn-review forget");
+  assert.ok(
+    sweepCtx.emitted.some(([event, payload]) => event === "api-session/removed" && payload === sid),
+    "残留清扫应补齐 api-session/removed",
+  );
+  assert.deepEqual(JSON.parse(readFileSync(pendingPath, "utf8")), [], "队列条目应在收尾后移除");
 });

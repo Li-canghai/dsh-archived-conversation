@@ -57,7 +57,6 @@ async function harness(t, { count = 120, projects = 12, coldTitles = false, chil
     if (path === process.env.ARCHIVED_CONV_PENDING_PATH) return "[]";
     return readFileSync(path, ...args);
   });
-
   t.mock.method(fs, "writeFileSync", () => {});
   t.mock.method(fs, "renameSync", () => {});
   syncBuiltinESMExports();
@@ -106,7 +105,6 @@ async function harness(t, { count = 120, projects = 12, coldTitles = false, chil
       };
     },
     effect: (dispose) => effects.push(dispose),
-
     inject: (names, callback) => {
       if (Array.isArray(names) && names.includes("connection")) {
         callback({

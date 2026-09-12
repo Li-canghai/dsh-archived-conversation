@@ -17,7 +17,7 @@ dsh plugin --profile web update dsh-archived-conversation@latest
 If pnpm 11 reports `minimum release age`, pin the exact version:
 
 ```sh
-dsh plugin --profile web add dsh-archived-conversation@0.2.10
+dsh plugin --profile web add dsh-archived-conversation@0.2.11
 ```
 
 GitHub Release tarball (no npm):
@@ -30,7 +30,6 @@ Restart `dsh --profile web` after installing or updating.
 
 ## What's New
 
-- **Desktop support** — the management API now mounts as exact Fetch routes on the shared Connection `/api` channel via a scoped `ctx.inject(["connection"])` (top-level injection is down to `workspaceRegistry`). The web profile serves it through the webserver bridge and the Desktop host through Electron's byte pipe, so the same Settings page and API work on both hosts.
-- **POST-body mutation endpoints** — `/unarchive` and `/delete` are now `POST /api/archived-conversation/{unarchive,delete}` routes taking a `{ "id": "<sessionId>" }` JSON body; the old DELETE-with-path-param endpoints are gone. Mutations reject cross-origin Origins and require a JSON Content-Type; the loopback trust fence is applied upstream by the webserver bridge / Desktop pipe.
-- **Requires DSH 0.1.5-rc.1+** — title reads go through the zero-I/O `cachedSnapshot` fast path, then `sessionController.inspect(id)` only; the `sessionPersistence.inspect` fallback is removed.
-- **Bounded parallelism for large archives** — metadata stats (limit 8) and cold title reads (limit 2) run through worker pools, and directory discovery is a single `readdir` pass instead of per-session per-project probing. The client skips re-renders when polled list data is unchanged.
+- **Safer deferred deletes** — unarchiving now cancels any queued delete for the session family, and the residual sweep only removes the directory of a session that is neither active nor still attached to a workspace slot, so a queued delete can never `rm` a live session's directory.
+- **Complete finalization after retries** — when a delete's `rm` initially fails (e.g. a Windows file lock) and the residual sweep later clears the directory, the sweep now also runs the full finalization: OpenViking linkage, the `api-session/removed` event, and turn-rewind/review sidecar plus plugin-cache cleanup.
+- **Hardened pending queues** — deferred-delete queue entries are validated against the session-id shape on load, so a corrupt queue file cannot smuggle arbitrary strings into the recursive `rm`; the OpenViking pending queue is now written atomically (tmp + rename, 0600) like the titles cache, and the atomic write helper moved to `lib/runtime-paths.mjs`.

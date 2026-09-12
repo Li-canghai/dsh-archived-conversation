@@ -184,7 +184,6 @@ test("flush: empty queue -> 0 without fetch", async () => {
 });
 
 test("push 与 flush 并发: 单写者队列保证新 push 不丢失 (review M3)", async () => {
-
   const initial = [{ sessionId: "dsh-old", attempts: 0 }];
   let entries = [...initial];
   let loadCount = 0;
@@ -198,7 +197,6 @@ test("push 与 flush 并发: 单写者队列保证新 push 不丢失 (review M3)
     },
     entries: () => entries,
   };
-
   let releaseFetch;
   const gate = new Promise((resolve) => { releaseFetch = resolve; });
   const fetchImpl = async (url) => {
@@ -206,9 +204,7 @@ test("push 与 flush 并发: 单写者队列保证新 push 不丢失 (review M3)
     return { ok: true, status: 200 };
   };
   const flushPromise = flushPendingOvDeletes({ env: envWithCreds(), fetchImpl, store });
-
   while (loadCount === 0) await new Promise((r) => setTimeout(r, 1));
-
   const pushPromise = pushOvPendingDelete({ sessionId: "dsh-new", store });
   releaseFetch();
   await Promise.all([flushPromise, pushPromise]);
