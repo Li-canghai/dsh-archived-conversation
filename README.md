@@ -80,7 +80,7 @@ dsh plugin --profile web update dsh-archived-conversation@latest
 若 pnpm 11 提示 `minimum release age`(版本发布不足 24 小时),改为钉死版本:
 
 ```sh
-dsh plugin --profile web add dsh-archived-conversation@0.2.11
+dsh plugin --profile web add dsh-archived-conversation@0.2.12
 ```
 
 也可从 GitHub Release 安装预构建包(不走 npm):

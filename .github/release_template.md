@@ -17,7 +17,7 @@ dsh plugin --profile web update dsh-archived-conversation@latest
 If pnpm 11 reports `minimum release age`, pin the exact version:
 
 ```sh
-dsh plugin --profile web add dsh-archived-conversation@0.2.11
+dsh plugin --profile web add dsh-archived-conversation@0.2.12
 ```
 
 GitHub Release tarball (no npm):
@@ -30,6 +30,8 @@ Restart `dsh --profile web` after installing or updating.
 
 ## What's New
 
-- **Safer deferred deletes** — unarchiving now cancels any queued delete for the session family, and the residual sweep only removes the directory of a session that is neither active nor still attached to a workspace slot, so a queued delete can never `rm` a live session's directory.
-- **Complete finalization after retries** — when a delete's `rm` initially fails (e.g. a Windows file lock) and the residual sweep later clears the directory, the sweep now also runs the full finalization: OpenViking linkage, the `api-session/removed` event, and turn-rewind/review sidecar plus plugin-cache cleanup.
-- **Hardened pending queues** — deferred-delete queue entries are validated against the session-id shape on load, so a corrupt queue file cannot smuggle arbitrary strings into the recursive `rm`; the OpenViking pending queue is now written atomically (tmp + rename, 0600) like the titles cache, and the atomic write helper moved to `lib/runtime-paths.mjs`.
+- **Simplified internals** — the header-access helper, the non-`WeakRef` agent-handle fallback, and the change-ledger manual list/delete fallback are gone: mutation routes read headers through the fetch `Headers` API only, `WeakRef` is assumed, and change-ledger cleanup relies solely on `deleteBySession`.
+- **Leaner title cache** — the separate in-memory title layer was removed; the persisted fingerprint-checked title map (`mtimeMs:size`, atomic 0600 writes) is now the single source, and deleting a session drops its cached title.
+- **Cleaner OpenViking linkage** — the `X-OpenViking-Actor-Peer` header is no longer sent and the single-writer queue helpers are no longer exported.
+- **Consistent mutation errors** — 500 responses now always carry a string `error` message.
+- All source files ship without code comments; tests were refactored to the fetch `Request` API with new coverage for cached-title cleanup on delete.
