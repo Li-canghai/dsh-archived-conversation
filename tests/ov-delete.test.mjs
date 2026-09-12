@@ -183,7 +183,7 @@ test("flush: empty queue -> 0 without fetch", async () => {
   assert.equal(fetchImpl.calls.length, 0);
 });
 
-test("push 与 flush 并发: 单写者队列保证新 push 不丢失 (review M3)", async () => {
+test("push 与 flush 并发: 单写者队列保证新 push 不丢失", async () => {
   const initial = [{ sessionId: "dsh-old", attempts: 0 }];
   let entries = [...initial];
   let loadCount = 0;

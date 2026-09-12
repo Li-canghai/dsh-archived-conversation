@@ -378,7 +378,7 @@ test("GET /ping 无 Origin 仍为 200", async () => {
   assert.equal(typeof r.body.version, "string");
 });
 
-test("POST 无 Origin 仍通过栅栏(Desktop 管道语义),未归档 id 返回 404", async () => {
+test("POST 无 Origin 仍通过栅栏,未归档 id 返回 404", async () => {
   const r = await call("POST", "/api/archived-conversation/unarchive", {
     host: GUI_HOST,
     "content-type": "application/json",
@@ -436,65 +436,17 @@ test("detach 失败时不改归档状态、不删目录,并排队", async () => 
 
 test("同源守卫: Origin 必须匹配 Host;跨源判定由 isCrossOriginMutation 承担", async () => {
   const m = await freshModule();
-  assert.equal(m.isSameOriginMutation({ headers: { host: GUI_HOST, origin: GUI_ORIGIN } }), true);
-  assert.equal(m.isSameOriginMutation({ headers: { host: GUI_HOST } }), false);
-  assert.equal(m.isSameOriginMutation({
-    headers: { host: GUI_HOST, origin: "http://evil.example" },
-  }), false);
-  assert.equal(m.isJsonContentType({ headers: { "content-type": "application/json; charset=utf-8" } }), true);
-  assert.equal(m.isCrossOriginMutation({ headers: { host: GUI_HOST } }), false);
-  assert.equal(m.isCrossOriginMutation({ headers: { host: GUI_HOST, origin: GUI_ORIGIN } }), false);
-  assert.equal(m.isCrossOriginMutation({ headers: { host: GUI_HOST, origin: "http://evil.example" } }), true);
+  const request = (headers) => new Request(GUI_ORIGIN, { method: "POST", headers });
+  assert.equal(m.isSameOriginMutation(request({ host: GUI_HOST, origin: GUI_ORIGIN })), true);
+  assert.equal(m.isSameOriginMutation(request({ host: GUI_HOST })), false);
+  assert.equal(m.isSameOriginMutation(request({ host: GUI_HOST, origin: "http://evil.example" })), false);
+  assert.equal(m.isJsonContentType(request({ "content-type": "application/json; charset=utf-8" })), true);
+  assert.equal(m.isCrossOriginMutation(request({ host: GUI_HOST })), false);
+  assert.equal(m.isCrossOriginMutation(request({ host: GUI_HOST, origin: GUI_ORIGIN })), false);
+  assert.equal(m.isCrossOriginMutation(request({ host: GUI_HOST, origin: "http://evil.example" })), true);
 });
 
-function makeLedgerSpy(targetId) {
-  const deleted = [];
-  const points = [
-    { id: "rp_keep_other", kind: "turn", sessionId: "session-other", workspace: "/proj" },
-    { id: "rp_turn_target", kind: "turn", sessionId: targetId, workspace: "/proj" },
-    { id: "rp_rescue_target", kind: "rescue", sessionId: targetId, workspace: "/proj" },
-    { id: "rp_user_nosession", kind: "user", workspace: "/proj" },
-  ];
-  return {
-    deleted,
-    listCalls: [],
-    async list(options) {
-      this.listCalls.push(options);
-      return points.filter((p) => !deleted.includes(p.id));
-    },
-    async delete(options) {
-      deleted.push(options.restorePointId);
-      return { restorePointId: options.restorePointId, deletedBlobs: 1, retainedBlobs: 0 };
-    },
-  };
-}
-
-test("删除归档对话时清掉该会话的 rewind 检查点与 review 快照", async () => {
-  const sid = "session-purge0000-0000-0000-0000-000000000001";
-  makeSession(sid, 64);
-  const ledger = makeLedgerSpy(sid);
-  const forgotten = [];
-  const m = await freshModule();
-  m.apply(makeCtx({
-    archivedIds: [sid],
-    get: {
-      changeLedger: ledger,
-      turnReview: { forget: (id) => forgotten.push(id) },
-    },
-  }));
-  const body = await callDelete(sid);
-  assert.equal(body.ok, true);
-  assert.equal(ledger.listCalls.length, 1);
-  assert.equal(ledger.listCalls[0].cwd, "/proj");
-  assert.equal(ledger.listCalls[0].includeRescue, true);
-  assert.equal(ledger.listCalls[0].includeTurnCheckpoints, true);
-  assert.deepEqual(ledger.deleted.sort(), ["rp_rescue_target", "rp_turn_target"]);
-  assert.equal(ledger.deleted.includes("rp_keep_other"), false);
-  assert.equal(ledger.deleted.includes("rp_user_nosession"), false);
-  assert.deepEqual(forgotten, [sid]);
-});
-
-test("优先走 changeLedger.deleteBySession", async () => {
+test("删除通过 changeLedger.deleteBySession 清检查点并 forget review 快照", async () => {
   const sid = "session-purge0000-0000-0000-0000-000000000006";
   makeSession(sid, 64);
   const calls = [];
@@ -508,8 +460,6 @@ test("优先走 changeLedger.deleteBySession", async () => {
           calls.push(options);
           return { deletedRestorePoints: 2, deletedOperations: 0, deletedSkips: 0 };
         },
-        async list() { throw new Error("list should not run"); },
-        async delete() { throw new Error("delete should not run"); },
       },
       turnReview: { forget: (id) => forgotten.push(id) },
     },
@@ -520,54 +470,27 @@ test("优先走 changeLedger.deleteBySession", async () => {
   assert.equal(calls[0].sessionId, sid);
   assert.equal(calls[0].cwd, "/proj");
   assert.deepEqual(forgotten, [sid]);
-});
-
-test("删除 rewind 检查点时 confirmation 必须是 DELETE <id>", async () => {
-  const sid = "session-purge0000-0000-0000-0000-000000000002";
-  makeSession(sid, 64);
-  const confirmations = [];
-  const m = await freshModule();
-  m.apply(makeCtx({
-    archivedIds: [sid],
-    get: {
-      changeLedger: {
-        async list() {
-          return [{ id: "rp_one", kind: "turn", sessionId: sid, workspace: "/proj" }];
-        },
-        async delete(options) {
-          confirmations.push(options);
-          return { restorePointId: options.restorePointId, deletedBlobs: 0, retainedBlobs: 0 };
-        },
-      },
-    },
-  }));
-  const body = await callDelete(sid);
-  assert.equal(body.ok, true);
-  assert.equal(confirmations.length, 1);
-  assert.equal(confirmations[0].restorePointId, "rp_one");
-  assert.equal(confirmations[0].confirmation, "DELETE rp_one");
-  assert.equal(confirmations[0].cwd, "/proj");
+  assert.equal(existsSync(join(sessionsBase, "--proj--", sid)), false);
 });
 
 test("取消归档不清 rewind 检查点也不 forget review 快照", async () => {
   const sid = "session-purge0000-0000-0000-0000-000000000003";
   makeSession(sid, 64);
-  let listCalls = 0;
+  let purgeCalls = 0;
   let forgetCalls = 0;
   const m = await freshModule();
   m.apply(makeCtx({
     archivedIds: [sid],
     get: {
       changeLedger: {
-        async list() { listCalls++; return []; },
-        async delete() { throw new Error("delete should not run"); },
+        async deleteBySession() { purgeCalls++; },
       },
       turnReview: { forget: () => { forgetCalls++; } },
     },
   }));
   const body = await callUnarchive(sid);
   assert.equal(body.ok, true);
-  assert.equal(listCalls, 0);
+  assert.equal(purgeCalls, 0);
   assert.equal(forgetCalls, 0);
   assert.ok(existsSync(join(sessionsBase, "--proj--", sid)), "取消归档不得删除会话目录");
 });
@@ -582,8 +505,6 @@ test("sidecar 清理失败不阻断会话删除", async () => {
     get: {
       changeLedger: {
         async deleteBySession() { throw new Error("ledger boom"); },
-        async list() { throw new Error("ledger boom"); },
-        async delete() { throw new Error("delete boom"); },
       },
       turnReview: { forget: () => { throw new Error("forget boom"); } },
     },
@@ -735,20 +656,49 @@ test("残留清扫完成后补齐删除收尾:removed 事件与 sidecar 清理",
   makeSession(sid, 16);
   writeFileSync(pendingPath, JSON.stringify([sid], null, 2));
   const forgotten = [];
+  const purged = [];
   const m = await freshModule();
   const ctxArgs = {
     archivedIds: [],
     sessionIds: [],
-    get: { turnReview: { forget: (id) => forgotten.push(id) } },
+    get: {
+      turnReview: { forget: (id) => forgotten.push(id) },
+      changeLedger: { deleteBySession: async (options) => { purged.push(options); } },
+    },
   };
   m.apply(makeCtx(ctxArgs));
   const sweepCtx = makeCtx(ctxArgs);
   await m.processPendingDeletes(sweepCtx, true);
   assert.ok(!existsSync(dir), "残留目录应被清扫");
   assert.deepEqual(forgotten, [sid], "残留清扫应补齐 turn-review forget");
+  assert.deepEqual(purged, [{ sessionId: sid }], "失去工作区路径后仍按会话清理检查点");
   assert.ok(
     sweepCtx.emitted.some(([event, payload]) => event === "api-session/removed" && payload === sid),
     "残留清扫应补齐 api-session/removed",
   );
   assert.deepEqual(JSON.parse(readFileSync(pendingPath, "utf8")), [], "队列条目应在收尾后移除");
+});
+
+test("删除只清除目标会话的持久化标题", async (t) => {
+  const cachePath = join(sandbox, "delete-title-cache.json");
+  const sid = "session-delete-cached-title";
+  const kept = { fp: "missing", title: "保留的标题" };
+  writeFileSync(cachePath, JSON.stringify({
+    [sid]: { fp: "missing", title: "待删除标题" },
+    "session-keep-cached-title": kept,
+  }));
+  let m;
+  process.env.ARCHIVED_CONV_TITLES_PATH = cachePath;
+  try {
+    m = await freshModule();
+  } finally {
+    process.env.ARCHIVED_CONV_TITLES_PATH = titlesPath;
+  }
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  m.apply(makeCtx({ archivedIds: [sid] }));
+  assert.equal((await callDelete(sid)).ok, true);
+  t.mock.timers.tick(300);
+  assert.deepEqual(JSON.parse(readFileSync(cachePath, "utf8")), {
+    "session-keep-cached-title": kept,
+  });
 });
